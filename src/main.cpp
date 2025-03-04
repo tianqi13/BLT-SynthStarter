@@ -3,6 +3,7 @@
 #include <bitset>
 #include <math.h>
 #include <STM32FreeRTOS.h>
+#include <knob.hpp>
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -37,9 +38,6 @@
 
 //Display driver object
 U8G2_SSD1305_128X32_ADAFRUIT_F_HW_I2C u8g2(U8G2_R0);
-
-//Global variables
-volatile uint32_t currentStepSize;
 
 //Function to set outputs using key matrix
 void setOutMuxBit(const uint8_t bitIdx, const bool value) {
@@ -94,7 +92,7 @@ constexpr std::array<uint32_t, 13> getArray() {
 
 const std::array<uint32_t, 13> StepSizes = getArray();
 
-int getStepIndex(std::bitset<32> inputs) {
+int32_t getStepIndex(std::bitset<32> inputs) {
   // Mask to clear bits 31 to 12
   std::bitset<32> mask = 0x00000FFF;
   std::bitset<32> temp = inputs & mask; 
@@ -117,18 +115,16 @@ int getStepIndex(std::bitset<32> inputs) {
 //Timer
 HardwareTimer sampleTimer(TIM1);
 
-struct {
-  std::bitset<32> inputs;
-  int rotation;
-  SemaphoreHandle_t mutex;
-
-} sysState;
-
+//Global variables
+volatile uint32_t currentStepSize;
+systemState sysState;
+volatile Knob knob3 = Knob(3, 0, 8, 0);
+volatile uint8_t TX_Message[8] = {0};
 
 void sampleISR() {
   // static local variable is not re-initialized on each call
   static uint32_t phaseAcc = 0;
-  int localRotation;
+  int32_t localRotation;
   localRotation = __atomic_load_n(&sysState.rotation, __ATOMIC_RELAXED);
   //uint32_t localCurrentStepSize;
   //localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
@@ -143,18 +139,15 @@ void sampleISR() {
 void scanKeysTask(void * pvParameters) {
   std::bitset<32> colState;
   std::bitset<32> localInputs;
-  int StepIndex;
+  int32_t currentStepIndex;
+  int32_t previousStepIndex = 12;
   uint32_t localCurrentStepSize;
 
-  bool knob3_a_current = false;
-  bool knob3_b_current = false;
-  bool knob3_a_previous = false;
-  bool knob3_b_previous = false;
-
-  int rotation = 0;
+  //define octave here 
+  TX_Message[1] = 4;
 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 40/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 10/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -169,46 +162,33 @@ void scanKeysTask(void * pvParameters) {
       colState = readCols();
       localInputs |= (colState << (i * 4));
     }
-    Serial.println(localInputs.to_string().c_str());
-    
-    knob3_a_current = localInputs[14];
-    knob3_b_current = localInputs[15];
+    //Serial.println(localInputs.to_string().c_str());
 
-    if (knob3_a_previous == false && knob3_a_current == true && knob3_b_previous == false && knob3_b_current == false) {
-      rotation = 1;  // Transition 00 -> 01
-    }
-    else if (knob3_a_previous == true && knob3_a_current == false && knob3_b_previous == false && knob3_b_current == false) {
-      rotation = -1; // Transition 01 -> 00
-    }
-    else if (knob3_a_previous == false && knob3_a_current == true && knob3_b_previous == true && knob3_b_current == true) {
-      rotation = -1; // Transition 10 -> 11
-    }
-    else if (knob3_a_previous == true && knob3_a_current == false && knob3_b_previous == true && knob3_b_current == false) {
-      rotation = 1;  // Transition 11 -> 10
-    }
-    else if (knob3_a_previous != knob3_a_current && knob3_b_previous != knob3_b_current){
-      // Impossible state, assume same direction as last legal transition
-    }
-    else {
-      rotation = 0;
-    }
-
-    knob3_a_previous = knob3_a_current;
-    knob3_b_previous = knob3_b_current;
-
-    //Serial.println(rotation);
+    //take mutex to update inputs
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     sysState.inputs = localInputs;
-    if (sysState.rotation + rotation > 8 || sysState.rotation + rotation < 0){}
-    else {
-      sysState.rotation += rotation;
-    }
     xSemaphoreGive(sysState.mutex);
+
+    knob3.updateRotation(localInputs);
+
     // Get the step index and step size
-    StepIndex = getStepIndex(localInputs);
-    Serial.println(StepIndex);
-    localCurrentStepSize = StepSizes[StepIndex];
+    currentStepIndex = getStepIndex(localInputs);
+    if (currentStepIndex != previousStepIndex) {
+      if (currentStepIndex == 12){
+        TX_Message[0] = 0x52; //'R' Released previous key 
+        TX_Message[2] = previousStepIndex;
+      }
+      else{
+        TX_Message[0] = 0x50; //'P' Pressed current key 
+        TX_Message[2] = currentStepIndex;
+      }
+    }
+
+    //Serial.println(StepIndex);
+    localCurrentStepSize = StepSizes[currentStepIndex];
     __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED);
+    
+    previousStepIndex = currentStepIndex;
 
     // UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);  
     // Serial.print("scanKeysTask stack remaining: ");
@@ -239,6 +219,11 @@ void displayUpdateTask(void * pvParameters) {
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     u8g2.print(sysState.rotation);
     xSemaphoreGive(sysState.mutex);
+
+    u8g2.setCursor(66,30);
+    u8g2.print((char) TX_Message[0]);
+    u8g2.print(TX_Message[1]);
+    u8g2.print(TX_Message[2]);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
