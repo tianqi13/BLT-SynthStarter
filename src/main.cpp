@@ -6,7 +6,10 @@
 #include <knob.hpp>
 #include <ES_CAN.h>
 
-#define receiver 
+// #define sender 
+// const uint32_t Octave = 4;
+
+#define receiver
 const uint32_t Octave = 3;
 
 //Constants
@@ -302,6 +305,10 @@ void CAN_TX_Task(void * pvParameters) {
 	while (1) {
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
+    Serial.println("Sent:");
+    Serial.print(msgOut[0]);
+    Serial.print(msgOut[1]);
+    Serial.print(msgOut[2]);
 		CAN_TX(0x123, msgOut);
 	}
 }
