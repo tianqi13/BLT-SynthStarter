@@ -6,11 +6,11 @@
 #include <knob.hpp>
 #include <ES_CAN.h>
 
-// #define sender 
-// const uint32_t Octave = 4;
+#define sender 
+const uint32_t Octave = 4;
 
-#define receiver
-const uint32_t Octave = 3;
+// #define receiver
+// const uint32_t Octave = 3;
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -159,16 +159,18 @@ void CAN_TX_ISR (void) {
 void scanKeysTask(void * pvParameters) {
   std::bitset<32> colState;
   std::bitset<32> localInputs;
-  int32_t currentStepIndex;
-  int32_t previousStepIndex = 12;
-  uint32_t localCurrentStepSize;
+  int32_t currentStepIndex = 12;
+  uint32_t localCurrentStepSize = 0;
   uint8_t TX_Message[8] = {0};
+  int32_t previousStepIndex = 12;
+  int32_t previousAction = 0x52;
 
-  //define octave here 
+  TX_Message[0] = 0x50;
   TX_Message[1] = Octave;
+  TX_Message[2] = 12; //initalise to be 12 
 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 10/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 25.2/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -177,13 +179,15 @@ void scanKeysTask(void * pvParameters) {
     localInputs.reset();
     
     // Loop through rows of key matrix and read columns
-    for(int i = 0; i<4; i++){
+    for(int i = 0; i<7; i++){
       setROW(i);
+      digitalWrite(OUT_PIN, outBits[i]);
+      digitalWrite(REN_PIN, 1);
       delayMicroseconds(3);
       colState = readCols();
       localInputs |= (colState << (i * 4));
+      digitalWrite(REN_PIN,0);
     }
-    //Serial.println(localInputs.to_string().c_str());
 
     //take mutex to update inputs
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -193,35 +197,83 @@ void scanKeysTask(void * pvParameters) {
     knob3.updateRotation(localInputs);
     currentStepIndex = getStepIndex(localInputs);
 
-    if (currentStepIndex != previousStepIndex) {
+    //if the note is not the same, then there has been a change
+    if (currentStepIndex != previousStepIndex){
+      //no notes are pressed now 
       if (currentStepIndex == 12){
-        TX_Message[0] = 0x52; //'R' Released previous key 
-        TX_Message[2] = previousStepIndex;
+        if (previousAction == 0x50){ // if previous action was pressed, now it means we released 
+          TX_Message[0] = 0x52; // released  
+          TX_Message[2] = previousStepIndex;
+
+          #ifdef receiver
+          xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+          #endif
+
+          #ifdef sender
+          xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+          // Serial.println("Sent to queue:");
+          // Serial.print(TX_Message[0]);
+          // Serial.print(TX_Message[1]);
+          // Serial.print(TX_Message[2]);
+          #endif
+        }
+
+        else if (previousAction == 0x52){ //previous action was release, still no notes are pressed
+          //do nothing
+        }
       }
+
+      //a note is pressed now
       else{
         TX_Message[0] = 0x50; //'P' Pressed current key 
         TX_Message[2] = currentStepIndex;
+
+        #ifdef receiver
+        xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+        #endif
+
+        #ifdef sender
+        xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+        // Serial.println("Sent to queue:");
+        // Serial.print(TX_Message[0]);
+        // Serial.print(TX_Message[1]);
+        // Serial.print(TX_Message[2]);
+        #endif
       }
     }
 
-    #ifdef sender
-    xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-    #endif
+    //in the case where they are the same but we continuously press a key, we should keep sending the message 
+    else{
+      if(currentStepIndex != 12){
+        TX_Message[0] = 0x50; //'P' Pressed current key 
+        TX_Message[2] = currentStepIndex;
 
-    #ifdef receiver
-    xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
-    #endif
+        #ifdef receiver
+        xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+        #endif
+
+        #ifdef sender
+        xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+        // Serial.println("Sent to queue:");
+        // Serial.print(TX_Message[0]);
+        // Serial.print(TX_Message[1]);
+        // Serial.print(TX_Message[2]);
+        #endif
+      }
+    }
 
     previousStepIndex = currentStepIndex;
-
+    previousAction = TX_Message[0];
+  
     // UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);  
     // Serial.print("scanKeysTask stack remaining: ");
     // Serial.println(stackRemaining);
   }
-
 }
 
 void displayUpdateTask(void * pvParameters) {
+  int32_t localRotation;
+  int8_t localRX_Message[8];
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
@@ -232,22 +284,35 @@ void displayUpdateTask(void * pvParameters) {
     //Update display
     u8g2.clearBuffer();         // clear the internal memory
     u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
-    u8g2.drawStr(2,10,"Hi World!");
+    #ifdef receiver
+    u8g2.drawStr(2,10,"Receiver");
+    #endif
 
+    #ifdef sender
+    u8g2.drawStr(2,10,"Sender");
+    #endif
+
+    #ifdef receiver
     u8g2.setCursor(2,20);
     u8g2.print("Step Size: ");
     u8g2.print(currentStepSize);
 
+    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+    localRX_Message[0] = sysState.RX_Message[0];
+    localRX_Message[1] = sysState.RX_Message[1];
+    localRX_Message[2] = sysState.RX_Message[2];
+    localRotation = sysState.rotation;
+    xSemaphoreGive(sysState.mutex);
+
     u8g2.setCursor(2,30);
     u8g2.print("Rotation: ");
-    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
-    u8g2.print(sysState.rotation);
+    u8g2.print(localRotation);
 
     u8g2.setCursor(66,30);
-    u8g2.print((char) sysState.RX_Message[0]);
-    u8g2.print(sysState.RX_Message[1]);
-    u8g2.print(sysState.RX_Message[2]);
-    xSemaphoreGive(sysState.mutex);
+    u8g2.print((char) localRX_Message[0]);
+    u8g2.print(localRX_Message[1]);
+    u8g2.print(localRX_Message[2]);
+    #endif
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
@@ -266,9 +331,9 @@ void decodeTask(void * pvParameters) {
   while(1){
     xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
     Serial.println("Received:");
-    Serial.println(localRX_Message[0]);
-    Serial.println(localRX_Message[1]);
-    Serial.println(localRX_Message[2]);
+    Serial.print(localRX_Message[0]);
+    Serial.print(localRX_Message[1]);
+    Serial.print(localRX_Message[2]);
 
     //because RX_Message is a global variable, we need to use a mutex to update it 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -305,10 +370,10 @@ void CAN_TX_Task(void * pvParameters) {
 	while (1) {
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
-    Serial.println("Sent:");
-    Serial.print(msgOut[0]);
-    Serial.print(msgOut[1]);
-    Serial.print(msgOut[2]);
+    // Serial.println("Sent from queue:");
+    // Serial.print(msgOut[0]);
+    // Serial.print(msgOut[1]);
+    // Serial.print(msgOut[2]);
 		CAN_TX(0x123, msgOut);
 	}
 }
@@ -352,7 +417,7 @@ void setup() {
   #endif
 
   //Initialise CAN
-  CAN_Init(true);
+  CAN_Init(false);
   setCANFilter(0x123, 0x7FF);
   #ifdef receiver
   CAN_RegisterRX_ISR(CAN_RX_ISR);
