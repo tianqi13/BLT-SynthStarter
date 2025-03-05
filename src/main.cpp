@@ -181,12 +181,12 @@ void scanKeysTask(void * pvParameters) {
     // Loop through rows of key matrix and read columns
     for(int i = 0; i<7; i++){
       setROW(i);
-      digitalWrite(OUT_PIN, outBits[i]);
-      digitalWrite(REN_PIN, 1);
+      //digitalWrite(OUT_PIN, outBits[i]);
+      //digitalWrite(REN_PIN, 1);
       delayMicroseconds(3);
       colState = readCols();
       localInputs |= (colState << (i * 4));
-      digitalWrite(REN_PIN,0);
+      //digitalWrite(REN_PIN,0);
     }
 
     //take mutex to update inputs
