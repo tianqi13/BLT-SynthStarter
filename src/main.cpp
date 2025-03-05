@@ -6,7 +6,7 @@
 #include <knob.hpp>
 #include <ES_CAN.h>
 
-#define sender 
+#define receiver 
 const uint32_t Octave = 3;
 
 //Constants
@@ -262,6 +262,10 @@ void decodeTask(void * pvParameters) {
 
   while(1){
     xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
+    Serial.println("Received:");
+    Serial.println(localRX_Message[0]);
+    Serial.println(localRX_Message[1]);
+    Serial.println(localRX_Message[2]);
 
     //because RX_Message is a global variable, we need to use a mutex to update it 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -359,7 +363,7 @@ void setup() {
   xTaskCreate(
     scanKeysTask,		/* Function that implements the task */
     "scanKeys",		/* Text name for the task */
-    256,      		/* Stack size in words, not bytes */
+    512,      		/* Stack size in words, not bytes */
     NULL,			/* Parameter passed into the task */
     4,			/* Task priority, higher value = higher priority*/
     &scanKeysHandle /* Pointer to store the task handle */
@@ -369,7 +373,7 @@ void setup() {
   xTaskCreate(
     displayUpdateTask,		/* Function that implements the task */
     "displayUpdate",		/* Text name for the task */
-    256,      		/* Stack size in words, not bytes */
+    512,      		/* Stack size in words, not bytes */
     NULL,			/* Parameter passed into the task */
     1,			/* Task priority */
     &displayUpdateHandle /* Pointer to store the task handle */
@@ -380,7 +384,7 @@ void setup() {
   xTaskCreate(
     decodeTask,		/* Function that implements the task */
     "decode RX",		/* Text name for the task */
-    256,      		/* Stack size in words, not bytes */
+    512,      		/* Stack size in words, not bytes */
     NULL,			/* Parameter passed into the task */
     3,			/* Task priority */
     &decodeHandle /* Pointer to store the task handle */
