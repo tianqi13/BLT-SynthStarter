@@ -4,6 +4,10 @@
 #include <math.h>
 #include <STM32FreeRTOS.h>
 #include <knob.hpp>
+#include <ES_CAN.h>
+
+#define sender 
+const uint32_t Octave = 3;
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -119,7 +123,9 @@ HardwareTimer sampleTimer(TIM1);
 volatile uint32_t currentStepSize;
 systemState sysState;
 volatile Knob knob3 = Knob(3, 0, 8, 0);
-volatile uint8_t TX_Message[8] = {0};
+QueueHandle_t msgInQ;
+QueueHandle_t msgOutQ;
+SemaphoreHandle_t CAN_TX_Semaphore;
 
 void sampleISR() {
   // static local variable is not re-initialized on each call
@@ -136,15 +142,27 @@ void sampleISR() {
   
 }
 
+void CAN_RX_ISR (void) {
+	uint8_t RX_Message_ISR[8];
+	uint32_t ID;
+	CAN_RX(ID, RX_Message_ISR);
+	xQueueSendFromISR(msgInQ, RX_Message_ISR, NULL);
+}
+
+void CAN_TX_ISR (void) {
+	xSemaphoreGiveFromISR(CAN_TX_Semaphore, NULL);
+}
+
 void scanKeysTask(void * pvParameters) {
   std::bitset<32> colState;
   std::bitset<32> localInputs;
   int32_t currentStepIndex;
   int32_t previousStepIndex = 12;
   uint32_t localCurrentStepSize;
+  uint8_t TX_Message[8] = {0};
 
   //define octave here 
-  TX_Message[1] = 4;
+  TX_Message[1] = Octave;
 
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 10/portTICK_PERIOD_MS;
@@ -170,9 +188,8 @@ void scanKeysTask(void * pvParameters) {
     xSemaphoreGive(sysState.mutex);
 
     knob3.updateRotation(localInputs);
-
-    // Get the step index and step size
     currentStepIndex = getStepIndex(localInputs);
+
     if (currentStepIndex != previousStepIndex) {
       if (currentStepIndex == 12){
         TX_Message[0] = 0x52; //'R' Released previous key 
@@ -184,10 +201,14 @@ void scanKeysTask(void * pvParameters) {
       }
     }
 
-    //Serial.println(StepIndex);
-    localCurrentStepSize = StepSizes[currentStepIndex];
-    __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED);
-    
+    #ifdef sender
+    xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+    #endif
+
+    #ifdef receiver
+    xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+    #endif
+
     previousStepIndex = currentStepIndex;
 
     // UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);  
@@ -218,18 +239,67 @@ void displayUpdateTask(void * pvParameters) {
     u8g2.print("Rotation: ");
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     u8g2.print(sysState.rotation);
-    xSemaphoreGive(sysState.mutex);
 
     u8g2.setCursor(66,30);
-    u8g2.print((char) TX_Message[0]);
-    u8g2.print(TX_Message[1]);
-    u8g2.print(TX_Message[2]);
+    u8g2.print((char) sysState.RX_Message[0]);
+    u8g2.print(sysState.RX_Message[1]);
+    u8g2.print(sysState.RX_Message[2]);
+    xSemaphoreGive(sysState.mutex);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
     //Toggle LED
     digitalToggle(LED_BUILTIN);
   }
+}
+
+void decodeTask(void * pvParameters) {
+  uint32_t ID;
+  uint32_t localCurrentStepSize;
+  uint32_t stepIndex;
+  uint32_t octave;
+  uint8_t localRX_Message[8];
+
+  while(1){
+    xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
+
+    //because RX_Message is a global variable, we need to use a mutex to update it 
+    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+    sysState.RX_Message[0] = localRX_Message[0];
+    sysState.RX_Message[1] = localRX_Message[1];
+    sysState.RX_Message[2] = localRX_Message[2];
+    xSemaphoreGive(sysState.mutex);
+
+    if (localRX_Message[0] == 0x50){ //pressed
+      stepIndex = localRX_Message[2];
+      octave = localRX_Message[1];
+      localCurrentStepSize = StepSizes[stepIndex];
+      if (octave >= 4){
+        localCurrentStepSize = localCurrentStepSize << (octave - 4);
+      }
+      else{
+        localCurrentStepSize = localCurrentStepSize >> (4 - octave);
+      }
+      __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED);
+    }
+
+    else if (localRX_Message[0] == 0x52){ //released
+      //if key is released, step size is 0
+      localCurrentStepSize = 0;
+      __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED);
+
+    }
+  }
+}
+
+void CAN_TX_Task(void * pvParameters) {
+  uint8_t msgOut[8];
+
+	while (1) {
+		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
+		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
+		CAN_TX(0x123, msgOut);
+	}
 }
 
 void setup() {
@@ -263,10 +333,27 @@ void setup() {
   Serial.begin(9600);
   Serial.println("Hello World");
 
+  #ifdef receiver
   //Timer for ISR 
   sampleTimer.setOverflow(22000, HERTZ_FORMAT);
   sampleTimer.attachInterrupt(sampleISR);
   sampleTimer.resume();
+  #endif
+
+  //Initialise CAN
+  CAN_Init(true);
+  setCANFilter(0x123, 0x7FF);
+  #ifdef receiver
+  CAN_RegisterRX_ISR(CAN_RX_ISR);
+  #endif
+
+  #ifdef sender
+  CAN_RegisterTX_ISR(CAN_TX_ISR);
+  #endif
+  CAN_Start();
+
+  msgInQ = xQueueCreate(36,8); //(number of items, size of each item)
+  msgOutQ = xQueueCreate(36,8); 
 
   TaskHandle_t scanKeysHandle = NULL;
   xTaskCreate(
@@ -274,7 +361,7 @@ void setup() {
     "scanKeys",		/* Text name for the task */
     256,      		/* Stack size in words, not bytes */
     NULL,			/* Parameter passed into the task */
-    2,			/* Task priority, higher value = higher priority*/
+    4,			/* Task priority, higher value = higher priority*/
     &scanKeysHandle /* Pointer to store the task handle */
   );	
 
@@ -288,7 +375,32 @@ void setup() {
     &displayUpdateHandle /* Pointer to store the task handle */
   );
 
+  #ifdef receiver
+  TaskHandle_t  decodeHandle = NULL; 
+  xTaskCreate(
+    decodeTask,		/* Function that implements the task */
+    "decode RX",		/* Text name for the task */
+    256,      		/* Stack size in words, not bytes */
+    NULL,			/* Parameter passed into the task */
+    3,			/* Task priority */
+    &decodeHandle /* Pointer to store the task handle */
+  );
+  #endif
+
+  #ifdef sender
+  TaskHandle_t  CAN_TXHandle = NULL; 
+  xTaskCreate(
+    CAN_TX_Task,		/* Function that implements the task */
+    "CAN_TX",		/* Text name for the task */
+    256,      		/* Stack size in words, not bytes */
+    NULL,			/* Parameter passed into the task */
+    2,			/* Task priority */
+    &CAN_TXHandle /* Pointer to store the task handle */
+  );
+  #endif
+
   sysState.mutex = xSemaphoreCreateMutex();
+  CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
   vTaskStartScheduler();
   
