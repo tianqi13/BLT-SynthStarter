@@ -4,6 +4,7 @@
 struct systemState{
     std::bitset<32> inputs;
     int32_t rotation;
+    int32_t waveRotation;
     uint8_t RX_Message[8];
   
     SemaphoreHandle_t mutex;
@@ -14,6 +15,7 @@ extern systemState sysState;
 class Knob {
     private:
       volatile int rotation;
+      volatile int waveRotation;
       volatile int offset;
       volatile int row; 
       volatile int column;
@@ -57,6 +59,7 @@ class Knob {
     public:
       Knob(volatile int _row, volatile int _column, volatile int _upperLimit, volatile int _lowerLimit){ 
         rotation = 0;  
+        waveRotation = 0;
         row = _row;
         column = _column;   
         upperLimit = _upperLimit;
@@ -84,10 +87,29 @@ class Knob {
         xSemaphoreGive(sysState.mutex);
       }
 
+      void updateWave(std::bitset<32> localInputs) volatile{
+        int offset = decodeOffset(localInputs);
+        if (waveRotation + offset > upperLimit || waveRotation + offset < lowerLimit){}
+        else {
+          waveRotation += offset;
+        }
+        xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+        sysState.waveRotation = waveRotation;
+        xSemaphoreGive(sysState.mutex);
+      }
+
       int getRotation() volatile{
         int localRotation;
         xSemaphoreTake(sysState.mutex, portMAX_DELAY);
         localRotation = sysState.rotation;
+        xSemaphoreGive(sysState.mutex);
+        return localRotation;
+      }
+
+      int getWave() volatile{
+        int localRotation;
+        xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+        localRotation = sysState.waveRotation;
         xSemaphoreGive(sysState.mutex);
         return localRotation;
       }

@@ -1,3 +1,5 @@
+#define _USE_MATH_DEFINES
+
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include <bitset>
@@ -6,11 +8,35 @@
 #include <knob.hpp>
 #include <ES_CAN.h>
 
-// #define sender 
-// const uint32_t Octave = 4;
+#include <array>
+#include <cmath>
 
-#define receiver
+#define receiver 
 const uint32_t Octave = 3;
+
+enum waveform {
+  SAWTOOTH,
+  SINE,
+  TRIANGLE,
+  SQUARE
+};
+
+volatile waveform CurrentWaveform = SAWTOOTH;
+
+#define TABLE_SIZE 256
+
+// Generate a sine lookup table
+int sineLUT[TABLE_SIZE];
+
+void generateSineLUT() {
+    int minVal = 127, maxVal = -128;
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        sineLUT[i] = (int)(127 * sinf(2 * M_PI * i / TABLE_SIZE));
+    }
+}
+
+// #define receiver
+// const uint32_t Octave = 3;
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -89,15 +115,17 @@ constexpr std::array<uint32_t, 13> getArray() {
     } else {
         freq = 440 / pow(freq_factor, (9 - i));
     }
+
     result[i] = (pow(2, 32) * freq) / 22000;
-}
+
+  }
 
   //To handle case where no notes are pressed
   result[12] = 0x0;
   return result;
 }
 
-const std::array<uint32_t, 13> StepSizes = getArray();
+std::array<uint32_t, 13> StepSizes = getArray();
 
 int32_t getStepIndex(std::bitset<32> inputs) {
   // Mask to clear bits 31 to 12
@@ -126,6 +154,7 @@ HardwareTimer sampleTimer(TIM1);
 volatile uint32_t currentStepSize;
 systemState sysState;
 volatile Knob knob3 = Knob(3, 0, 8, 0);
+volatile Knob knob2 = Knob(3, 2, 3, 0); // 4 waveforms for now
 QueueHandle_t msgInQ;
 QueueHandle_t msgOutQ;
 SemaphoreHandle_t CAN_TX_Semaphore;
@@ -133,14 +162,46 @@ SemaphoreHandle_t CAN_TX_Semaphore;
 void sampleISR() {
   // static local variable is not re-initialized on each call
   static uint32_t phaseAcc = 0;
+
   int32_t localRotation;
   localRotation = __atomic_load_n(&sysState.rotation, __ATOMIC_RELAXED);
+  //Serial.println(localRotation);
   //uint32_t localCurrentStepSize;
   //localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
 
   phaseAcc += currentStepSize;
-  int32_t Vout = (phaseAcc >> 24) - 128;
+  // int32_t Vout = (phaseAcc >> 24) - 128;
+
+  // int32_t Vout = 128 * sinf(((phaseAcc >> 24) * 2 * M_PI) / 256);
+
+  uint8_t index = phaseAcc >> 24; // Get upper 8 bits
+  int32_t Vout;
+  
+  if(CurrentWaveform==SINE){
+    Vout = sineLUT[index];
+    // Vout = Vout * 1.2; // Scale for RMS better
+  } else if (CurrentWaveform==SAWTOOTH){
+    Vout = index - 128;
+    Vout = Vout * 0.5;
+  } else if (CurrentWaveform==TRIANGLE){
+    if (index < 128) {
+      Vout = 2 * index - 128; // Rising part
+    } else {
+      Vout = 2 * (255 - index) - 128; // Falling part
+    }
+    // Vout = Vout * 1.2; // Scale for RMS better
+  } else if (CurrentWaveform==SQUARE){
+    Vout = (index < 128) ? -128 : 127;
+    Vout = Vout * 0.5;
+  }
+
+  // Serial.println(phaseAcc);
+  // Serial.print("Vout: ");
+  // Serial.println(Vout);
+
+  // volume
   Vout = Vout >> (8 - localRotation);
+     
   analogWrite(OUTR_PIN, Vout + 128);
   
 }
@@ -168,7 +229,7 @@ void scanKeysTask(void * pvParameters) {
   TX_Message[1] = Octave;
 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 10/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 50/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -191,6 +252,17 @@ void scanKeysTask(void * pvParameters) {
     xSemaphoreGive(sysState.mutex);
 
     knob3.updateRotation(localInputs);
+    int32_t waveformIndex = knob2.getWave();
+    switch(waveformIndex) {
+      case 0: CurrentWaveform = SAWTOOTH; break;
+      case 1: CurrentWaveform = SINE; break;
+      case 2: CurrentWaveform = TRIANGLE; break;
+      case 3: CurrentWaveform = SQUARE; break;
+    }
+
+    StepSizes = getArray();
+    knob2.updateWave(localInputs);
+
     currentStepIndex = getStepIndex(localInputs);
 
     if (currentStepIndex != previousStepIndex) {
@@ -234,12 +306,17 @@ void displayUpdateTask(void * pvParameters) {
     u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
     u8g2.drawStr(2,10,"Hi World!");
 
+    u8g2.setCursor(66,10);
+    u8g2.print("Wave: ");
+    u8g2.print(CurrentWaveform);
+
     u8g2.setCursor(2,20);
     u8g2.print("Step Size: ");
     u8g2.print(currentStepSize);
 
+
     u8g2.setCursor(2,30);
-    u8g2.print("Rotation: ");
+    u8g2.print("Volume: ");
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     u8g2.print(sysState.rotation);
 
@@ -265,10 +342,10 @@ void decodeTask(void * pvParameters) {
 
   while(1){
     xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
-    Serial.println("Received:");
-    Serial.println(localRX_Message[0]);
-    Serial.println(localRX_Message[1]);
-    Serial.println(localRX_Message[2]);
+    // Serial.println("Received:");
+    // Serial.println(localRX_Message[0]);
+    // Serial.println(localRX_Message[1]);
+    // Serial.println(localRX_Message[2]);
 
     //because RX_Message is a global variable, we need to use a mutex to update it 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -305,10 +382,10 @@ void CAN_TX_Task(void * pvParameters) {
 	while (1) {
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
-    Serial.println("Sent:");
-    Serial.print(msgOut[0]);
-    Serial.print(msgOut[1]);
-    Serial.print(msgOut[2]);
+    // Serial.print("Sent: ");
+    // Serial.print(msgOut[0]);
+    // Serial.print(msgOut[1]);
+    // Serial.println(msgOut[2]);
 		CAN_TX(0x123, msgOut);
 	}
 }
@@ -343,6 +420,8 @@ void setup() {
   //Initialise UART
   Serial.begin(9600);
   Serial.println("Hello World");
+  
+  generateSineLUT();
 
   #ifdef receiver
   //Timer for ISR 
