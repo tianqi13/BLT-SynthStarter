@@ -165,21 +165,26 @@ void sampleISR() {
 
   int32_t localRotation;
   localRotation = __atomic_load_n(&sysState.rotation, __ATOMIC_RELAXED);
-  //Serial.println(localRotation);
-  //uint32_t localCurrentStepSize;
-  //localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
+
+  // uint32_t localCurrentStepSize;
+  // localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
+
+  if (currentStepSize == 0) {
+    analogWrite(OUTR_PIN, 128);
+    return;
+  }
 
   phaseAcc += currentStepSize;
   // int32_t Vout = (phaseAcc >> 24) - 128;
 
-  // int32_t Vout = 128 * sinf(((phaseAcc >> 24) * 2 * M_PI) / 256);
-
   uint8_t index = phaseAcc >> 24; // Get upper 8 bits
   int32_t Vout;
+
+  // CurrentWaveform = SINE;
   
   if(CurrentWaveform==SINE){
     Vout = sineLUT[index];
-    // Vout = Vout * 1.2; // Scale for RMS better
+    // Vout = Vout << 8; // Scale??
   } else if (CurrentWaveform==SAWTOOTH){
     Vout = index - 128;
     Vout = Vout * 0.5;
@@ -189,7 +194,7 @@ void sampleISR() {
     } else {
       Vout = 2 * (255 - index) - 128; // Falling part
     }
-    // Vout = Vout * 1.2; // Scale for RMS better
+    // Vout = Vout * 1.2; // Scale??
   } else if (CurrentWaveform==SQUARE){
     Vout = (index < 128) ? -128 : 127;
     Vout = Vout * 0.5;
@@ -201,6 +206,10 @@ void sampleISR() {
 
   // volume
   Vout = Vout >> (8 - localRotation);
+
+  
+  // Serial.print("Final output: ");
+  // Serial.println(Vout + 128);
      
   analogWrite(OUTR_PIN, Vout + 128);
   
@@ -304,15 +313,15 @@ void displayUpdateTask(void * pvParameters) {
     //Update display
     u8g2.clearBuffer();         // clear the internal memory
     u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
-    u8g2.drawStr(2,10,"Hi World!");
+    // u8g2.drawStr(2,10,"Hi World!");
 
-    u8g2.setCursor(66,10);
+    u8g2.setCursor(66,30);
     u8g2.print("Wave: ");
     u8g2.print(CurrentWaveform);
 
-    u8g2.setCursor(2,20);
-    u8g2.print("Step Size: ");
-    u8g2.print(currentStepSize);
+    // u8g2.setCursor(2,20);
+    // u8g2.print("Step Size: ");
+    // u8g2.print(currentStepSize);
 
 
     u8g2.setCursor(2,30);
@@ -320,10 +329,10 @@ void displayUpdateTask(void * pvParameters) {
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     u8g2.print(sysState.rotation);
 
-    u8g2.setCursor(66,30);
-    u8g2.print((char) sysState.RX_Message[0]);
-    u8g2.print(sysState.RX_Message[1]);
-    u8g2.print(sysState.RX_Message[2]);
+    // u8g2.setCursor(66,30);
+    // u8g2.print((char) sysState.RX_Message[0]);
+    // u8g2.print(sysState.RX_Message[1]);
+    // u8g2.print(sysState.RX_Message[2]);
     xSemaphoreGive(sysState.mutex);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
