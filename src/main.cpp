@@ -201,10 +201,12 @@ HardwareTimer sampleTimer(TIM1);
 //Global variables
 volatile uint32_t currentStepSize;
 systemState sysState;
-volatile Knob knob3 = Knob(3, 3, 0, 8, 0);
+volatile Knob knob3 = Knob(3, 3, 0, 8, 0); // volume
 volatile Knob knob2 = Knob(2, 3, 2, 10, 0); // change to sustain - figure out waveforms in a bit
 volatile Knob knob1 = Knob(1, 4, 0, 500, 0); // decay
 volatile Knob knob0 = Knob(0, 4, 2, 500, 0); // attack
+
+volatile Knob knobWave = Knob(4, 5, 1, 3, 0); // waveform - when knob3 is pressed
 QueueHandle_t msgInQ;
 QueueHandle_t msgOutQ;
 SemaphoreHandle_t CAN_TX_Semaphore;
@@ -240,7 +242,6 @@ void sampleISR() {
   uint8_t index = phaseAcc >> 24; // Get upper 8 bits
   int32_t Vout;
 
-  // CurrentWaveform = SINE;
   
   if(CurrentWaveform==SINE){
     Vout = sineLUT[index];
@@ -323,8 +324,6 @@ void scanKeysTask(void * pvParameters) {
     // Serial.print("Inputs:");
     // Serial.println(localInputs.to_string().c_str());
 
-    //Serial.println(localInputs.to_string().c_str());
-
     //take mutex to update inputs
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     sysState.inputs = localInputs;
@@ -334,6 +333,7 @@ void scanKeysTask(void * pvParameters) {
     knob2.updateRotation(localInputs);
     knob1.updateRotation(localInputs);
     knob0.updateRotation(localInputs);
+    knobWave.updateWave(localInputs);
     
     // Serial.print("Knob Index: ");
     // Serial.println(knob0.knobIndex);
@@ -342,16 +342,15 @@ void scanKeysTask(void * pvParameters) {
     envelope.decayTime = knob1.getRotation();
     envelope.sustainLevel = knob2.getRotation() / 10.0f;
 
-    // int32_t waveformIndex = knob2.getWave();
-    // switch(waveformIndex) {
-    //   case 0: CurrentWaveform = SAWTOOTH; break;
-    //   case 1: CurrentWaveform = SINE; break;
-    //   case 2: CurrentWaveform = TRIANGLE; break;
-    //   case 3: CurrentWaveform = SQUARE; break;
-    // }
+    int32_t waveformIndex = knobWave.getRotation();
+    switch(waveformIndex) {
+      case 0: CurrentWaveform = SAWTOOTH; break;
+      case 1: CurrentWaveform = SINE; break;
+      case 2: CurrentWaveform = TRIANGLE; break;
+      case 3: CurrentWaveform = SQUARE; break;
+    }
 
     StepSizes = getArray();
-    // knob2.updateWave(localInputs);
 
     currentStepIndex = getStepIndex(localInputs);
 

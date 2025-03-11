@@ -3,7 +3,7 @@
 
 struct systemState{
     std::bitset<32> inputs;
-    int32_t rotation[4];
+    int32_t rotation[5];
     // int32_t rotation3;
     // int32_t rotation2;
     // int32_t rotation1;
@@ -22,7 +22,7 @@ class Knob {
       // volatile int rotation2;
       // volatile int rotation1;
       // volatile int rotation0;
-      volatile int rotation[3];
+      volatile int rotation[5];
       volatile int knobIndex;
       // volatile int waveRotation;
       volatile int offset;
@@ -96,27 +96,43 @@ class Knob {
         xSemaphoreGive(sysState.mutex);
 
         if (localRotation + offset > upperLimit || localRotation + offset < lowerLimit){}
-        else if (knobIndex == 3 || knobIndex == 2) {
-          localRotation += offset;
-        } else{
+        else if (knobIndex == 0 || knobIndex == 1) {
           localRotation += offset * 10;
+        } else{
+          localRotation += offset;
         }
         //get mutex to update rotation value 
         xSemaphoreTake(sysState.mutex, portMAX_DELAY);
         sysState.rotation[knobIndex] = localRotation;
         xSemaphoreGive(sysState.mutex);
+
+        // if (knobIndex == 4){
+        //   Serial.println(localRotation);
+        // }
       }
 
-      // void updateWave(std::bitset<32> localInputs) volatile{
-      //   int offset = decodeOffset(localInputs);
-      //   if (waveRotation + offset > upperLimit || waveRotation + offset < lowerLimit){}
-      //   else {
-      //     waveRotation += offset;
-      //   }
-      //   xSemaphoreTake(sysState.mutex, portMAX_DELAY);
-      //   sysState.waveRotation = waveRotation;
-      //   xSemaphoreGive(sysState.mutex);
-      // }
+      void updateWave(std::bitset<32> localInputs) volatile{
+        knob_b_current = localInputs[row*4 + column];
+
+        xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+        int localRotation = sysState.rotation[knobIndex];
+        xSemaphoreGive(sysState.mutex);
+        
+
+        if (knob_b_current == 1 && knob_b_previous == 0 && localRotation < upperLimit){
+          localRotation += 1;
+        } else if (knob_b_current == 1 && knob_b_previous == 0 && localRotation > lowerLimit){
+          localRotation = 0;
+        }
+
+        xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+        sysState.rotation[knobIndex] = localRotation;
+        xSemaphoreGive(sysState.mutex);
+
+        knob_b_previous = knob_b_current;
+
+
+      }
 
       int getRotation() volatile{
         int localRotation;
