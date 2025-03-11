@@ -17,6 +17,7 @@
 
 #define DISABLE_THREADS
 #define TEST_SCANKEYS
+// #define TEST_DECODETASK
 
 enum waveform {
   SAWTOOTH,
@@ -38,9 +39,6 @@ void generateSineLUT() {
         sineLUT[i] = (int)(127 * sinf(2 * M_PI * i / TABLE_SIZE));
     }
 }
-
-// #define receiver
-// const uint32_t Octave = 3;
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -198,7 +196,6 @@ void sampleISR() {
   
   if(CurrentWaveform==SINE){
     Vout = sineLUT[index];
-    // Vout = Vout << 8; // Scale??
   } else if (CurrentWaveform==SAWTOOTH){
     Vout = index - 128;
     Vout = Vout * 0.5;
@@ -208,27 +205,15 @@ void sampleISR() {
     } else {
       Vout = 2 * (255 - index) - 128; // Falling part
     }
-    // Vout = Vout * 1.2; // Scale??
   } else if (CurrentWaveform==SQUARE){
     Vout = (index < 128) ? -128 : 127;
     Vout = Vout * 0.5;
   }
 
-  // Serial.println(phaseAcc);
-  // Serial.print("Vout: ");
-  // Serial.println(Vout);
-
   // volume
   Vout = Vout >> (8 - localRotation);
-
-  
-  // Serial.print("Final output: ");
-  // Serial.println(Vout + 128);
      
-  analogWrite(OUTR_PIN, Vout + 128);
-
-  //Serial.println(Vout + 128);
-  
+  analogWrite(OUTR_PIN, Vout + 128);  
 }
 
 void CAN_RX_ISR (void) {
@@ -243,13 +228,19 @@ void CAN_TX_ISR (void) {
 }
 
 void scanKeysTask(void * pvParameters) {
+  // Serial.println("Scan Keys Task");
   std::bitset<32> colState;
   std::bitset<32> localInputs;
+  #ifdef TEST_SCANKEYS
+  int32_t previousStepIndex = 11;
+  int32_t previousAction = 0x50;
+  #else
+  int32_t previousStepIndex = 12;
+  int32_t previousAction = 0x52;
+  #endif
   int32_t currentStepIndex = 12;
   uint32_t localCurrentStepSize = 0;
   uint8_t TX_Message[8] = {0};
-  int32_t previousStepIndex = 12;
-  int32_t previousAction = 0x52;
   bool outBit;
 
   TX_Message[0] = 0x50;
@@ -281,15 +272,6 @@ void scanKeysTask(void * pvParameters) {
       localInputs |= (colState << (i * 4));
       digitalWrite(REN_PIN,0);
     }
-
-    #ifdef TEST_SCANKEYS
-    for (int i = 0; i < 12; i++) {
-      TX_Message[2] = i;
-      xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-    }
-    break;
-    #endif
-
     //take mutex to update inputs
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     sysState.inputs = localInputs;
@@ -324,10 +306,6 @@ void scanKeysTask(void * pvParameters) {
 
           #ifdef sender
           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-          // Serial.println("Sent to queue:");
-          // Serial.print(TX_Message[0]);
-          // Serial.print(TX_Message[1]);
-          // Serial.print(TX_Message[2]);
           #endif
         }
 
@@ -348,30 +326,6 @@ void scanKeysTask(void * pvParameters) {
 
         #ifdef sender
         xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-        // Serial.println("Sent to queue:");
-        // Serial.print(TX_Message[0]);
-        // Serial.print(TX_Message[1]);
-        // Serial.print(TX_Message[2]);
-        #endif
-      }
-    }
-
-    //in the case where they are the same but we continuously press a key, we should keep sending the message 
-    else{
-      if(currentStepIndex != 12){
-        TX_Message[0] = 0x50; //'P' Pressed current key 
-        TX_Message[2] = currentStepIndex;
-
-        #ifdef receiver
-        xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
-        #endif
-
-        #ifdef sender
-        xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-        // Serial.println("Sent to queue:");
-        // Serial.print(TX_Message[0]);
-        // Serial.print(TX_Message[1]);
-        // Serial.print(TX_Message[2]);
         #endif
       }
     }
@@ -382,6 +336,14 @@ void scanKeysTask(void * pvParameters) {
     // UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);  
     // Serial.print("scanKeysTask stack remaining: ");
     // Serial.println(stackRemaining);
+    
+    #ifdef TEST_SCANKEYS
+    // for (int i = 0; i < 12; i++) {
+    //   TX_Message[2] = i;
+    //   xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+    // }
+    break;
+    #endif
   }
 }
 
@@ -445,8 +407,6 @@ void displayUpdateTask(void * pvParameters) {
     digitalToggle(LED_BUILTIN);
   }
 }
-
-
 
 void decodeTask(void * pvParameters) {
   uint32_t ID;
@@ -902,20 +862,34 @@ void setup() {
   
   #endif
 
-  #ifdef TEST_SCANKEYS
-  uint32_t startTime = micros();
-  for (int iter = 0; iter < 32; iter++) {
-    scanKeysTask(NULL);
-  }
-  Serial.println(micros() - startTime);
-  while(1);
-  #endif
 
   sysState.mutex = xSemaphoreCreateMutex();
   hsState.mutex = xSemaphoreCreateMutex();
   CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
+  #ifdef TEST_SCANKEYS
+  uint32_t startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    scanKeysTask(NULL);
+  }
+  uint32_t final_time = micros() - startTime;
+  // final_time = final_time / 32;
+  Serial.println(final_time);
+  while(1);
+  #endif
+
+  #ifdef TEST_DECODETASK
+  uint32_t startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    decodeTask(NULL);
+  }
+  Serial.println(micros() - startTime);
+  while(1);
+  #endif
+
+  #ifndef DISABLE_THREADS
   vTaskStartScheduler();
+  #endif
   
 }
 
