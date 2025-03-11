@@ -12,12 +12,12 @@
 #include <array>
 #include <cmath>
 
-// #define receiver 
-#define sender
+#define receiver 
+// #define sender
 
-// #define DISABLE_THREADS
-// #define TEST_SCANKEYS
-// #define TEST_DECODETASK
+//#define DISABLE_THREADS
+//#define TEST_SCANKEYS
+//#define TEST_DECODETASK
 
 enum waveform {
   SAWTOOTH,
@@ -284,17 +284,18 @@ void CAN_TX_ISR (void) {
 void scanKeysTask(void * pvParameters) {
   std::bitset<32> colState;
   std::bitset<32> localInputs;
-  #ifdef TEST_SCANKEYS
-  int32_t previousStepIndex = 11;
-  int32_t previousAction = 0x50;
-  #else
   int32_t previousStepIndex = 12;
   int32_t previousAction = 0x52;
-  #endif
   int32_t currentStepIndex = 12;
   uint32_t localCurrentStepSize = 0;
   uint8_t TX_Message[8] = {0};
   bool outBit;
+  int32_t waveformIndex;
+
+  #ifdef TEST_SCANKEYS
+  previousStepIndex = 11;
+  previousAction = 0x50;
+  #endif
 
   TX_Message[0] = 0x50;
   TX_Message[1] = 4;
@@ -302,7 +303,7 @@ void scanKeysTask(void * pvParameters) {
 
   #ifndef TEST_SCANKEYS 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 25.2/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 20/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
   #endif
@@ -400,17 +401,13 @@ void scanKeysTask(void * pvParameters) {
     // Serial.println(stackRemaining);
     
     #ifdef TEST_SCANKEYS
-    // for (int i = 0; i < 12; i++) {
-    //   TX_Message[2] = i;
-    //   xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-    // }
     break;
     #endif
   }
 }
 
 void displayUpdateTask(void * pvParameters) {
-  int32_t localRotation[3];
+  int32_t localRotation[4];
   int8_t localRX_Message[8];
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
@@ -440,6 +437,7 @@ void displayUpdateTask(void * pvParameters) {
     localRX_Message[0] = sysState.RX_Message[0];
     localRX_Message[1] = sysState.RX_Message[1];
     localRX_Message[2] = sysState.RX_Message[2];
+    localRotation[4] = sysState.rotation[4];
     localRotation[3] = sysState.rotation[3];
     localRotation[2] = sysState.rotation[2];
     localRotation[1] = sysState.rotation[1];
@@ -449,7 +447,7 @@ void displayUpdateTask(void * pvParameters) {
     u8g2.setCursor(2,20);
     u8g2.print("Vol: ");
     u8g2.print(localRotation[3]);
-
+    
     u8g2.setCursor(66,20);
     u8g2.print((char) localRX_Message[0]);
     u8g2.print(localRX_Message[1]);
@@ -458,7 +456,7 @@ void displayUpdateTask(void * pvParameters) {
     u8g2.setCursor(3, 30);
     u8g2.print("A: ");
     u8g2.print(envelope.attackTime);
-    u8g2.setCursor(40, 30);
+    u8g2.setCursor(35, 30);
     u8g2.print("D: ");
     u8g2.print(envelope.decayTime);
     u8g2.setCursor(70, 30);
@@ -482,6 +480,10 @@ void decodeTask(void * pvParameters) {
 
   while(1){
     xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
+    Serial.println("Received from queue:");
+    Serial.print((char)localRX_Message[0]);
+    Serial.print(localRX_Message[1]);
+    Serial.println(localRX_Message[2]);
 
     //because RX_Message is a global variable, we need to use a mutex to update it 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -545,6 +547,9 @@ void decodeTask(void * pvParameters) {
       };
     }
 
+    #ifdef TEST_DECODETASK
+    break;
+    #endif
   }
 }
 
@@ -571,8 +576,6 @@ void handshakeTask(void * pvParameters){
   bool eastDetect;
   bool westMost = false; 
   bool eastMost = false;
-  bool secondWest = false;
-  bool secondEast = false; 
   uint32_t localOctave;
 
   int32_t handshakeSymbol = 0x48; //'H'
@@ -699,7 +702,7 @@ void handshakeTask(void * pvParameters){
 
     // Complete handshake
     // we either plug in on the westmost or eastmost module 
-    // and we either remove the westmost or eastmost module 
+    // and we remove from anywhere 
     else{
 
       xSemaphoreTake(hsState.mutex, portMAX_DELAY);
@@ -732,6 +735,19 @@ void handshakeTask(void * pvParameters){
           handshakeComplete.store(false, std::memory_order_release);
           westMost = false;
         }
+        
+        //if you are the west most AND not the only module, look out for disconnects on your east
+        //but once disconnected you are the only module, so no need to send message 
+        if(position != -99){
+          if(!eastDetect){
+            //handle your own handshake variables
+            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+            hsState.moduleMap.clear();
+            xSemaphoreGive(hsState.mutex);
+            
+            handshakeComplete.store(false, std::memory_order_release);
+          }
+        }
       }
 
       if (eastMost){
@@ -751,24 +767,21 @@ void handshakeTask(void * pvParameters){
           handshakeComplete.store(false, std::memory_order_release);
           eastMost = false;
         }
+
+        if(position != -99){
+          if(!westDetect){
+            //handle your own handshake variables
+            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+            hsState.moduleMap.clear();
+            xSemaphoreGive(hsState.mutex);
+            
+            handshakeComplete.store(false, std::memory_order_release);
+          }
+        }
       }
 
-      secondWest = false;
-      secondEast = false;
-
-      if (position == 1){
-        secondWest = true;
-        Serial.println("I am Second West");
-      }
-
-      else if (position == (mapSize - 2)){
-        secondEast = true;
-        Serial.println("I am Second East");
-      }
-
-      //if you are second west, you are responsible for sending message if the westmost module disconnects
-      if(secondWest){
-        if(!westDetect){
+      if (!eastMost && !westMost){
+        if (!westDetect || !eastDetect){
           TX_Message[0] = 0x44; // 'C'
           TX_Message[1] = 0; //handshake incomplete
           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
@@ -781,22 +794,6 @@ void handshakeTask(void * pvParameters){
           
           handshakeComplete.store(false, std::memory_order_release);
         }
-      }
-
-      if(secondEast){
-        if(!eastDetect){
-          TX_Message[0] = 0x44; // 'C'
-          TX_Message[1] = 0; //handshake incomplete
-          xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-          Serial.println("Sent Handshake: handshake incomplete, eastmost module disconnected");
-
-          //handle your own handshake variables
-          xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-          hsState.moduleMap.clear();
-          xSemaphoreGive(hsState.mutex);
-          
-          handshakeComplete.store(false, std::memory_order_release);
-       } 
       }
     }
   }
@@ -854,11 +851,8 @@ void setup() {
   CAN_Start();
   #endif
 
-  #ifdef TEST_SCANKEYS
-  msgOutQ = xQueueCreate(384, 8);
-  #else
   msgOutQ = xQueueCreate(36,8); //(number of items, size of each item)
-  #endif
+  msgInQ = xQueueCreate(36, 8);
 
   #ifndef DISABLE_THREADS
 
@@ -920,22 +914,38 @@ void setup() {
   CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
   #ifdef TEST_SCANKEYS
-  uint32_t startTime = micros();
+  float startTime = micros();
   for (int iter = 0; iter < 32; iter++) {
     scanKeysTask(NULL);
   }
-  uint32_t final_time = micros() - startTime;
-  // final_time = final_time / 32;
-  Serial.println(final_time);
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for ScanKeys (ms): ");
+  Serial.println(final_time/32000);
   while(1);
   #endif
 
   #ifdef TEST_DECODETASK
-  uint32_t startTime = micros();
-  for (int iter = 0; iter < 32; iter++) {
+  for (int iter = 0; iter < 36; iter++) {
+    uint8_t TX_Message[8] = {0};
+    
+    // Possible values
+    uint8_t options[] = {0x44, 0x48, 0x50, 0x52};
+
+    // Randomly select one of the four values
+    TX_Message[0] = options[rand() % 4];
+
+    xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+  }
+
+  float startTime = micros();
+  for (int iter = 0; iter < 36; iter++) {
     decodeTask(NULL);
   }
-  Serial.println(micros() - startTime);
+
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for DecodeTask (ms): ");
+  Serial.println(final_time/36000);
+
   while(1);
   #endif
 

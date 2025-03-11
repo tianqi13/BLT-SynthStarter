@@ -3,12 +3,7 @@
 
 struct systemState{
     std::bitset<32> inputs;
-    int32_t rotation[5];
-    // int32_t rotation3;
-    // int32_t rotation2;
-    // int32_t rotation1;
-    // int32_t rotation0;
-    // int32_t waveRotation;
+    int32_t rotation[5] = {50, 100, 7, 8, 0};
     uint8_t RX_Message[8] = {0};
   
     SemaphoreHandle_t mutex;
