@@ -235,29 +235,30 @@ void sampleISR() {
   uint32_t localCurrentStepSize;
   localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
 
+  uint32_t localCurrentWaveform;
+  localCurrentWaveform = __atomic_load_n(&CurrentWaveform, __ATOMIC_RELAXED);
+
   if (localCurrentStepSize == 0) {
     analogWrite(OUTR_PIN, 128);
     return;
   }
 
   phaseAcc += localCurrentStepSize;
-  // int32_t Vout = (phaseAcc >> 24) - 128;
 
   uint8_t index = phaseAcc >> 24; // Get upper 8 bits
   int32_t Vout;
 
-  
-  if(CurrentWaveform==SINE){
+  if(localCurrentWaveform==SINE){
     Vout = sineLUT[index];
-  } else if (CurrentWaveform==SAWTOOTH){
+  } else if (localCurrentWaveform==SAWTOOTH){
     Vout = index - 128;
-  } else if (CurrentWaveform==TRIANGLE){
+  } else if (localCurrentWaveform==TRIANGLE){
     if (index < 128) {
-      Vout = 2 * index - 128; // Rising part
+      Vout = 2 * index - 128;
     } else {
-      Vout = 2 * (255 - index) - 128; // Falling part
+      Vout = 2 * (255 - index) - 128; 
     }
-  } else if (CurrentWaveform==SQUARE){
+  } else if (localCurrentWaveform==SQUARE){
     Vout = (index < 128) ? -128 : 127;
   }
 
