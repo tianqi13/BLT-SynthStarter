@@ -15,9 +15,15 @@
 #define receiver 
 // #define sender
 
-//#define DISABLE_THREADS
+// #define DISABLE_THREADS
 //#define TEST_SCANKEYS
 //#define TEST_DECODETASK
+// #define TEST_DISPLAY
+// #define TEST_ISR
+#define TEST_HANDSHAKE // uncommented defines have not been implemented
+#define TEST_ENVELOPE
+#define TEST_CAN_TX
+#define TEST_CAN_RX
 
 enum waveform {
   SAWTOOTH,
@@ -27,7 +33,6 @@ enum waveform {
 };
 
 volatile waveform CurrentWaveform = SAWTOOTH;
-
 
 #define TABLE_SIZE 256
 
@@ -86,9 +91,6 @@ float calculateEnvelopeLevel() {
   envelope.currentLevel = level;
   return level;
 }
-
-// #define receiver
-// const uint32_t Octave = 3;
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -416,7 +418,10 @@ void displayUpdateTask(void * pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while (1){
+    #ifndef TEST_DISPLAY
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    #endif
+
     //Update display
     u8g2.clearBuffer();         // clear the internal memory
     u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
@@ -469,6 +474,10 @@ void displayUpdateTask(void * pvParameters) {
 
     //Toggle LED
     digitalToggle(LED_BUILTIN);
+
+    #ifdef TEST_DISPLAY
+    break;
+    #endif
   }
 }
 
@@ -947,6 +956,28 @@ void setup() {
   Serial.print("Worst Case Time for DecodeTask (ms): ");
   Serial.println(final_time/36000);
 
+  while(1);
+  #endif
+
+  #ifdef TEST_ISR
+  float startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    sampleISR();
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for ISR: ");
+  Serial.println(final_time/32);
+  while(1);
+  #endif
+
+  #ifdef TEST_DISPLAY
+  float startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    displayUpdateTask(NULL);
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for Display Update: ");
+  Serial.println(final_time/32);
   while(1);
   #endif
 
