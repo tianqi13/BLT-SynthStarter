@@ -23,6 +23,7 @@ enum waveform {
 
 volatile waveform CurrentWaveform = SAWTOOTH;
 
+
 #define TABLE_SIZE 256
 
 // Generate a sine lookup table
@@ -33,6 +34,52 @@ void generateSineLUT() {
     for (int i = 0; i < TABLE_SIZE; i++) {
         sineLUT[i] = (int)(127 * sinf(2 * M_PI * i / TABLE_SIZE));
     }
+}
+
+struct ADSEnvelope { // milliseconds
+  uint32_t attackTime = 50;    
+  uint32_t decayTime = 100;
+  float sustainLevel = 0.7f;   // 0.0 to 1.0
+  
+  float currentLevel = 0.0f;
+  uint32_t startTime = 0;
+  bool noteOn = false;
+  bool inRelease = false;
+};
+
+volatile ADSEnvelope envelope;
+
+void startEnvelope() {
+  envelope.startTime = millis();
+  envelope.noteOn = true;
+  envelope.inRelease = false;
+}
+
+float calculateEnvelopeLevel() {
+  uint32_t currentTime = millis();
+  uint32_t elapsedTime;
+  float level = 0.0f;
+  
+  if (envelope.noteOn) {
+    elapsedTime = currentTime - envelope.startTime;
+    
+    // Attack phase
+    if (elapsedTime < envelope.attackTime) {
+      level = (float)elapsedTime / envelope.attackTime;
+    }
+    // Decay phase
+    else if (elapsedTime < (envelope.attackTime + envelope.decayTime)) {
+      uint32_t decayElapsed = elapsedTime - envelope.attackTime;
+      level = 1.0f - ((1.0f - envelope.sustainLevel) * ((float)decayElapsed / envelope.decayTime));
+    }
+    // Sustain phase
+    else {
+      level = envelope.sustainLevel;
+    }
+  }
+  
+  envelope.currentLevel = level;
+  return level;
 }
 
 // #define receiver
@@ -200,9 +247,8 @@ void sampleISR() {
     Vout = Vout * 0.5;
   }
 
-  // Serial.println(phaseAcc);
-  // Serial.print("Vout: ");
-  // Serial.println(Vout);
+  float envelopeLevel = calculateEnvelopeLevel();
+  Vout = Vout * envelopeLevel;
 
   // volume
   Vout = Vout >> (8 - localRotation);
