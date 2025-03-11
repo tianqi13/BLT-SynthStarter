@@ -12,8 +12,12 @@
 #include <array>
 #include <cmath>
 
-#define receiver 
-// #define sender
+// #define receiver 
+#define sender
+
+// #define DISABLE_THREADS
+// #define TEST_SCANKEYS
+// #define TEST_DECODETASK
 
 enum waveform {
   SAWTOOTH,
@@ -245,7 +249,6 @@ void sampleISR() {
   
   if(CurrentWaveform==SINE){
     Vout = sineLUT[index];
-    // Vout = Vout << 8; // Scale??
   } else if (CurrentWaveform==SAWTOOTH){
     Vout = index - 128;
   } else if (CurrentWaveform==TRIANGLE){
@@ -254,7 +257,6 @@ void sampleISR() {
     } else {
       Vout = 2 * (255 - index) - 128; // Falling part
     }
-    // Vout = Vout * 1.2; // Scale??
   } else if (CurrentWaveform==SQUARE){
     Vout = (index < 128) ? -128 : 127;
   }
@@ -265,14 +267,7 @@ void sampleISR() {
   // volume
   Vout = Vout >> (8 - localVolume);
 
-  
-  // Serial.print("Final output: ");
-  // Serial.println(Vout + 128);
-     
-  analogWrite(OUTR_PIN, Vout + 128);
-
-  //Serial.println(Vout + 128);
-  
+  analogWrite(OUTR_PIN, Vout + 128);  
 }
 
 void CAN_RX_ISR (void) {
@@ -289,24 +284,34 @@ void CAN_TX_ISR (void) {
 void scanKeysTask(void * pvParameters) {
   std::bitset<32> colState;
   std::bitset<32> localInputs;
+  #ifdef TEST_SCANKEYS
+  int32_t previousStepIndex = 11;
+  int32_t previousAction = 0x50;
+  #else
+  int32_t previousStepIndex = 12;
+  int32_t previousAction = 0x52;
+  #endif
   int32_t currentStepIndex = 12;
   uint32_t localCurrentStepSize = 0;
   uint8_t TX_Message[8] = {0};
-  int32_t previousStepIndex = 12;
-  int32_t previousAction = 0x52;
   bool outBit;
 
   TX_Message[0] = 0x50;
   TX_Message[1] = 4;
   TX_Message[2] = 12; //initalise to be 12 
 
+  #ifndef TEST_SCANKEYS 
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 25.2/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
+  #endif
 
   while (1){
+    #ifndef TEST_SCANKEYS
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    #endif
+
     localInputs.reset();
     
     // Loop through rows of key matrix and read columns
@@ -320,10 +325,7 @@ void scanKeysTask(void * pvParameters) {
       localInputs |= (colState << (i * 4));
       digitalWrite(REN_PIN,0);
     }
-
-    // Serial.print("Inputs:");
-    // Serial.println(localInputs.to_string().c_str());
-
+    
     //take mutex to update inputs
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     sysState.inputs = localInputs;
@@ -334,9 +336,6 @@ void scanKeysTask(void * pvParameters) {
     knob1.updateRotation(localInputs);
     knob0.updateRotation(localInputs);
     knobWave.updateWave(localInputs);
-    
-    // Serial.print("Knob Index: ");
-    // Serial.println(knob0.knobIndex);
 
     envelope.attackTime = knob0.getRotation();
     envelope.decayTime = knob1.getRotation();
@@ -389,10 +388,6 @@ void scanKeysTask(void * pvParameters) {
 
         #ifdef sender
         xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-        // Serial.println("Sent to queue:");
-        // Serial.print(TX_Message[0]);
-        // Serial.print(TX_Message[1]);
-        // Serial.print(TX_Message[2]);
         #endif
       }
     }
@@ -403,6 +398,14 @@ void scanKeysTask(void * pvParameters) {
     // UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);  
     // Serial.print("scanKeysTask stack remaining: ");
     // Serial.println(stackRemaining);
+    
+    #ifdef TEST_SCANKEYS
+    // for (int i = 0; i < 12; i++) {
+    //   TX_Message[2] = i;
+    //   xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+    // }
+    break;
+    #endif
   }
 }
 
@@ -470,8 +473,6 @@ void displayUpdateTask(void * pvParameters) {
   }
 }
 
-
-
 void decodeTask(void * pvParameters) {
   uint32_t ID;
   uint32_t localCurrentStepSize;
@@ -511,14 +512,6 @@ void decodeTask(void * pvParameters) {
     }
 
     else if(localRX_Message[0] == 0x48){ //handshake 
-      // Serial.print("Received Handshake:");
-      // Serial.print((char)localRX_Message[0]);
-      // Serial.print(localRX_Message[1]);
-      // Serial.print(localRX_Message[2]);
-      // Serial.print(localRX_Message[3]);
-      // Serial.print(localRX_Message[4]);
-      // Serial.println(localRX_Message[5]);
-
       if(handshakeComplete.load(std::memory_order_acquire) == true){
         handshakeComplete.store(false, std::memory_order_release);
       }
@@ -561,10 +554,6 @@ void CAN_TX_Task(void * pvParameters) {
 	while (1) {
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
-    // Serial.println("Sent from queue:");
-    // Serial.print(msgOut[0]);
-    // Serial.print(msgOut[1]);
-    // Serial.print(msgOut[2]);
 		CAN_TX(0x123, msgOut);
 	}
 }
@@ -718,9 +707,6 @@ void handshakeTask(void * pvParameters){
       auto it = hsState.moduleMap.find(ID);
       int position = (it != hsState.moduleMap.end()) ? it->second : -99;
       xSemaphoreGive(hsState.mutex);
-
-      // Serial.print("Position:");
-      // Serial.println(position);
     
       localOctave = 4;
 
@@ -851,21 +837,30 @@ void setup() {
   generateSineLUT();
 
   #ifdef receiver
+  #ifndef DISABLE_THREADS
   //Timer for ISR 
   sampleTimer.setOverflow(22000, HERTZ_FORMAT);
   sampleTimer.attachInterrupt(sampleISR);
   sampleTimer.resume();
   #endif
+  #endif
 
   //Initialise CAN
+  #ifndef DISABLE_THREADS
   CAN_Init(false);
   setCANFilter(0x123, 0x7FF);
   CAN_RegisterRX_ISR(CAN_RX_ISR);
   CAN_RegisterTX_ISR(CAN_TX_ISR);
   CAN_Start();
+  #endif
 
-  msgInQ = xQueueCreate(36,8); //(number of items, size of each item)
-  msgOutQ = xQueueCreate(36,8); 
+  #ifdef TEST_SCANKEYS
+  msgOutQ = xQueueCreate(384, 8);
+  #else
+  msgOutQ = xQueueCreate(36,8); //(number of items, size of each item)
+  #endif
+
+  #ifndef DISABLE_THREADS
 
   TaskHandle_t scanKeysHandle = NULL;
   xTaskCreate(
@@ -916,12 +911,37 @@ void setup() {
     1,			/* Task priority */
     &displayUpdateHandle /* Pointer to store the task handle */
   );
+  
+  #endif
+
 
   sysState.mutex = xSemaphoreCreateMutex();
   hsState.mutex = xSemaphoreCreateMutex();
   CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
+  #ifdef TEST_SCANKEYS
+  uint32_t startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    scanKeysTask(NULL);
+  }
+  uint32_t final_time = micros() - startTime;
+  // final_time = final_time / 32;
+  Serial.println(final_time);
+  while(1);
+  #endif
+
+  #ifdef TEST_DECODETASK
+  uint32_t startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    decodeTask(NULL);
+  }
+  Serial.println(micros() - startTime);
+  while(1);
+  #endif
+
+  #ifndef DISABLE_THREADS
   vTaskStartScheduler();
+  #endif
   
 }
 
