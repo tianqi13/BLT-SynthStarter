@@ -7,12 +7,13 @@
 #include <STM32FreeRTOS.h>
 #include <knob.hpp>
 #include <ES_CAN.h>
+#include <atomic>
 
 #include <array>
 #include <cmath>
 
 #define receiver 
-const uint32_t Octave = 3;
+// #define sender
 
 enum waveform {
   SAWTOOTH,
@@ -205,6 +206,16 @@ volatile Knob knob2 = Knob(3, 2, 3, 0); // 4 waveforms for now
 QueueHandle_t msgInQ;
 QueueHandle_t msgOutQ;
 SemaphoreHandle_t CAN_TX_Semaphore;
+volatile uint32_t Octave;
+
+volatile bool outBits[7] = {0,0,0,1,1,1,1};
+std::atomic<bool> handshakeComplete{false};
+struct handshakeState{
+  std::unordered_map<uint32_t, int> moduleMap;
+  SemaphoreHandle_t mutex;
+};
+handshakeState hsState;
+
 
 void sampleISR() {
   // static local variable is not re-initialized on each call
@@ -213,15 +224,15 @@ void sampleISR() {
   int32_t localRotation;
   localRotation = __atomic_load_n(&sysState.rotation, __ATOMIC_RELAXED);
 
-  // uint32_t localCurrentStepSize;
-  // localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
+  uint32_t localCurrentStepSize;
+  localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
 
-  if (currentStepSize == 0) {
+  if (localCurrentStepSize == 0) {
     analogWrite(OUTR_PIN, 128);
     return;
   }
 
-  phaseAcc += currentStepSize;
+  phaseAcc += localCurrentStepSize;
   // int32_t Vout = (phaseAcc >> 24) - 128;
 
   uint8_t index = phaseAcc >> 24; // Get upper 8 bits
@@ -258,6 +269,8 @@ void sampleISR() {
   // Serial.println(Vout + 128);
      
   analogWrite(OUTR_PIN, Vout + 128);
+
+  //Serial.println(Vout + 128);
   
 }
 
@@ -275,16 +288,19 @@ void CAN_TX_ISR (void) {
 void scanKeysTask(void * pvParameters) {
   std::bitset<32> colState;
   std::bitset<32> localInputs;
-  int32_t currentStepIndex;
-  int32_t previousStepIndex = 12;
-  uint32_t localCurrentStepSize;
+  int32_t currentStepIndex = 12;
+  uint32_t localCurrentStepSize = 0;
   uint8_t TX_Message[8] = {0};
+  int32_t previousStepIndex = 12;
+  int32_t previousAction = 0x52;
+  bool outBit;
 
-  //define octave here 
-  TX_Message[1] = Octave;
+  TX_Message[0] = 0x50;
+  TX_Message[1] = 4;
+  TX_Message[2] = 12; //initalise to be 12 
 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 50/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 25.2/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -293,12 +309,17 @@ void scanKeysTask(void * pvParameters) {
     localInputs.reset();
     
     // Loop through rows of key matrix and read columns
-    for(int i = 0; i<4; i++){
+    for(int i = 0; i<7; i++){
       setROW(i);
+      outBit = __atomic_load_n(&outBits[i], __ATOMIC_RELAXED);
+      digitalWrite(OUT_PIN, outBit);
+      digitalWrite(REN_PIN, 1);
       delayMicroseconds(3);
       colState = readCols();
       localInputs |= (colState << (i * 4));
+      digitalWrite(REN_PIN,0);
     }
+
     //Serial.println(localInputs.to_string().c_str());
 
     //take mutex to update inputs
@@ -320,35 +341,85 @@ void scanKeysTask(void * pvParameters) {
 
     currentStepIndex = getStepIndex(localInputs);
 
-    if (currentStepIndex != previousStepIndex) {
+    //if the note is not the same, then there has been a change
+    if (currentStepIndex != previousStepIndex){
+      //no notes are pressed now 
       if (currentStepIndex == 12){
-        TX_Message[0] = 0x52; //'R' Released previous key 
-        TX_Message[2] = previousStepIndex;
+        if (previousAction == 0x50){ // if previous action was pressed, now it means we released 
+          TX_Message[0] = 0x52; // released  
+          TX_Message[1] = __atomic_load_n(&Octave, __ATOMIC_RELAXED);
+          TX_Message[2] = previousStepIndex;
+
+          #ifdef receiver
+          xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+          #endif
+
+          #ifdef sender
+          xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+          // Serial.println("Sent to queue:");
+          // Serial.print(TX_Message[0]);
+          // Serial.print(TX_Message[1]);
+          // Serial.print(TX_Message[2]);
+          #endif
+        }
+
+        else if (previousAction == 0x52){ //previous action was release, still no notes are pressed
+          //do nothing
+        }
       }
+
+      //a note is pressed now
       else{
         TX_Message[0] = 0x50; //'P' Pressed current key 
+        TX_Message[1] = __atomic_load_n(&Octave, __ATOMIC_RELAXED);
         TX_Message[2] = currentStepIndex;
+
+        #ifdef receiver
+        xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+        #endif
+
+        #ifdef sender
+        xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+        // Serial.println("Sent to queue:");
+        // Serial.print(TX_Message[0]);
+        // Serial.print(TX_Message[1]);
+        // Serial.print(TX_Message[2]);
+        #endif
       }
     }
 
-    #ifdef sender
-    xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-    #endif
+    //in the case where they are the same but we continuously press a key, we should keep sending the message 
+    else{
+      if(currentStepIndex != 12){
+        TX_Message[0] = 0x50; //'P' Pressed current key 
+        TX_Message[2] = currentStepIndex;
 
-    #ifdef receiver
-    xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
-    #endif
+        #ifdef receiver
+        xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+        #endif
+
+        #ifdef sender
+        xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+        // Serial.println("Sent to queue:");
+        // Serial.print(TX_Message[0]);
+        // Serial.print(TX_Message[1]);
+        // Serial.print(TX_Message[2]);
+        #endif
+      }
+    }
 
     previousStepIndex = currentStepIndex;
-
+    previousAction = TX_Message[0];
+  
     // UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);  
     // Serial.print("scanKeysTask stack remaining: ");
     // Serial.println(stackRemaining);
   }
-
 }
 
 void displayUpdateTask(void * pvParameters) {
+  int32_t localRotation;
+  int8_t localRX_Message[8];
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
@@ -359,26 +430,45 @@ void displayUpdateTask(void * pvParameters) {
     //Update display
     u8g2.clearBuffer();         // clear the internal memory
     u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
-    // u8g2.drawStr(2,10,"Hi World!");
+    #ifdef receiver
+    u8g2.drawStr(2,10,"Receiver");
+    #endif
 
-    u8g2.setCursor(66,30);
+    #ifdef sender
+    u8g2.drawStr(2,10,"Sender");
+    #endif
+
+    #ifdef receiver
+    u8g2.setCursor(2,20);
+    u8g2.print("Step Size: ");
+    u8g2.print(currentStepSize);
+
+    u8g2.setCursor(66,10);
     u8g2.print("Wave: ");
     u8g2.print(CurrentWaveform);
 
-    // u8g2.setCursor(2,20);
-    // u8g2.print("Step Size: ");
-    // u8g2.print(currentStepSize);
-
+    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+    localRX_Message[0] = sysState.RX_Message[0];
+    localRX_Message[1] = sysState.RX_Message[1];
+    localRX_Message[2] = sysState.RX_Message[2];
+    localRotation = sysState.rotation;
+    xSemaphoreGive(sysState.mutex);
 
     u8g2.setCursor(2,30);
+    u8g2.print("Rotation: ");
+    u8g2.print(localRotation);
+
+    u8g2.setCursor(66,30);
+    u8g2.print((char) localRX_Message[0]);
+    u8g2.print(localRX_Message[1]);
+    u8g2.print(localRX_Message[2]);
+    #endif
+
+    u8g2.setCursor(66,20);
     u8g2.print("Volume: ");
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     u8g2.print(sysState.rotation);
 
-    // u8g2.setCursor(66,30);
-    // u8g2.print((char) sysState.RX_Message[0]);
-    // u8g2.print(sysState.RX_Message[1]);
-    // u8g2.print(sysState.RX_Message[2]);
     xSemaphoreGive(sysState.mutex);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
@@ -387,6 +477,8 @@ void displayUpdateTask(void * pvParameters) {
     digitalToggle(LED_BUILTIN);
   }
 }
+
+
 
 void decodeTask(void * pvParameters) {
   uint32_t ID;
@@ -397,10 +489,6 @@ void decodeTask(void * pvParameters) {
 
   while(1){
     xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
-    // Serial.println("Received:");
-    // Serial.println(localRX_Message[0]);
-    // Serial.println(localRX_Message[1]);
-    // Serial.println(localRX_Message[2]);
 
     //because RX_Message is a global variable, we need to use a mutex to update it 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -426,8 +514,50 @@ void decodeTask(void * pvParameters) {
       //if key is released, step size is 0
       localCurrentStepSize = 0;
       __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED);
-
     }
+
+    else if(localRX_Message[0] == 0x48){ //handshake 
+      Serial.print("Received Handshake:");
+      Serial.print((char)localRX_Message[0]);
+      Serial.print(localRX_Message[1]);
+      Serial.print(localRX_Message[2]);
+      Serial.print(localRX_Message[3]);
+      Serial.print(localRX_Message[4]);
+      Serial.println(localRX_Message[5]);
+
+      if(handshakeComplete.load(std::memory_order_acquire) == true){
+        handshakeComplete.store(false, std::memory_order_release);
+      }
+
+      uint32_t moduleID = (localRX_Message[1] << 0)  |  // Least significant byte
+                          (localRX_Message[2] << 8)  |
+                          (localRX_Message[3] << 16) |
+                          (localRX_Message[4] << 24);  // Most significant byte
+      xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+      if (hsState.moduleMap.find(moduleID) == hsState.moduleMap.end()) {
+        hsState.moduleMap[moduleID] = localRX_Message[5];
+      }
+      xSemaphoreGive(hsState.mutex);
+    }
+
+    else if(localRX_Message[0] == 0x44){ //handshake 
+      if (localRX_Message[1] == 1){
+        Serial.println("Received Handshake Complete from the eastmost module");
+        handshakeComplete.store(true, std::memory_order_release);
+        __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
+      }
+
+      else if (localRX_Message[1] == 0){
+        Serial.println("Received Handshake Not Complete");
+        handshakeComplete.store(false, std::memory_order_release);
+        __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
+
+        xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+        hsState.moduleMap.clear();
+        xSemaphoreGive(hsState.mutex);
+      };
+    }
+
   }
 }
 
@@ -437,13 +567,261 @@ void CAN_TX_Task(void * pvParameters) {
 	while (1) {
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
-    // Serial.print("Sent: ");
+    // Serial.println("Sent from queue:");
     // Serial.print(msgOut[0]);
     // Serial.print(msgOut[1]);
-    // Serial.println(msgOut[2]);
+    // Serial.print(msgOut[2]);
 		CAN_TX(0x123, msgOut);
 	}
 }
+
+//HANDSHAKING AND AUTO DETECT 
+uint32_t getIDHash(){
+    uint32_t uid = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();  // Get the first 32 bits of the unique ID
+    return uid;
+}
+
+void handshakeTask(void * pvParameters){
+  uint32_t ID = getIDHash();
+  std::bitset<32> localInputs;
+  bool westDetect; 
+  bool eastDetect;
+  bool westMost = false; 
+  bool eastMost = false;
+  bool secondWest = false;
+  bool secondEast = false; 
+  uint32_t localOctave;
+
+  int32_t handshakeSymbol = 0x48; //'H'
+  int8_t TX_Message[8] = {0};
+  TX_Message[0] = handshakeSymbol;
+  TX_Message[1] = ID & 0xFF;         
+  TX_Message[2] = (ID >> 8) & 0xFF;
+  TX_Message[3] = (ID >> 16) & 0xFF;
+  TX_Message[4] = (ID >> 24) & 0xFF; 
+
+  //xFrequency is the initiation interval of the task 
+  const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
+  // xLastWakeTime stores the tick count of the last initiation
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+
+  while (1){
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
+    localInputs = sysState.inputs;
+    xSemaphoreGive(sysState.mutex);
+
+    //check for handshake inputs 
+    //West detect = Row 5 Col 3 
+    //East detect = Row 6 Col 3
+    westDetect = !localInputs[5*4 + 3];
+    eastDetect = !localInputs[6*4 + 3];
+
+    TX_Message[0] = handshakeSymbol;
+    TX_Message[1] = ID & 0xFF;         
+    TX_Message[2] = (ID >> 8) & 0xFF;
+    TX_Message[3] = (ID >> 16) & 0xFF;
+    TX_Message[4] = (ID >> 24) & 0xFF; 
+    
+    if(handshakeComplete.load(std::memory_order_acquire) == false){
+      delayMicroseconds(3);
+
+      if (westDetect){
+        Serial.println("west detected");
+        continue;
+      }
+    
+      else{
+        xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+        int mapSize = hsState.moduleMap.size();
+        bool inMap = hsState.moduleMap.find(ID) != hsState.moduleMap.end();
+        xSemaphoreGive(hsState.mutex);
+
+        //no west, yes east
+        if (eastDetect){
+          Serial.println("east detected");
+          //CASE1: WESTMOST MODULE  
+          if (mapSize == 0) {
+            TX_Message[5] = mapSize; //position is the size of the map 
+            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+            Serial.println("Sent Handshake: westmost module");
+            __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
+
+            //append yourself to your map 
+            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+            hsState.moduleMap[ID] = mapSize;
+            xSemaphoreGive(hsState.mutex);
+
+            //make myself westmost 
+            westMost = true;
+          }
+          
+          //map not empty 
+          else {
+            if (inMap){
+              Serial.println("Already in map, waiting for handshake complete");
+              continue;
+            }
+
+            //CASE 2: MIDDLE MODULE  
+            else{
+              TX_Message[5] = mapSize; //position is the size of the map
+              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+              Serial.println("Sent Handshake: Middle module");
+              __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
+
+              //append yourself to your map 
+              xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+              hsState.moduleMap[ID] = mapSize;
+              xSemaphoreGive(hsState.mutex);
+            }
+          }
+        }
+    
+        // no west, no east
+        // either you are the only module OR the eastmost module 
+        else{
+          //CASE 4: ONLY MODULE
+          if (mapSize == 0){
+            Serial.println("We are the only module");
+            handshakeComplete.store(true, std::memory_order_release);
+            westMost = true; 
+            eastMost = true;
+          }
+
+          //CASE 3: EASTMOST MODULE
+          else{
+            TX_Message[5] = mapSize; //position is the size of the map
+            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+            Serial.println("Sent Handshake: eastmost module");
+
+            //append yourself to your map 
+            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+            hsState.moduleMap[ID] = mapSize;
+            xSemaphoreGive(hsState.mutex);
+
+            TX_Message[0] = 0x44; // 'C'
+            TX_Message[1] = 1; //handshake complete
+            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+            Serial.println("Sent Handshake: handshake complete");
+
+            //update your own handshaking signal 
+            handshakeComplete.store(true, std::memory_order_release);
+
+            eastMost = true;
+          }
+        }
+      } 
+    }
+
+    // Complete handshake
+    // we either plug in on the westmost or eastmost module 
+    // and we either remove the westmost or eastmost module 
+    else{
+
+      xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+      int mapSize = hsState.moduleMap.size();
+      auto it = hsState.moduleMap.find(ID);
+      int position = (it != hsState.moduleMap.end()) ? it->second : -99;
+      xSemaphoreGive(hsState.mutex);
+
+      Serial.print("Position:");
+      Serial.println(position);
+    
+      localOctave = 4;
+
+      if (mapSize > 1 && position >= 0) {
+        localOctave = 3 + position;
+      }
+      __atomic_store_n(&Octave, localOctave, __ATOMIC_RELAXED);
+
+      if (westMost){
+        //look out for a west signal, if detected means something has plugged in 
+        if(westDetect){
+          if(position != -99){
+            TX_Message[0] = 0x44; // 'C'
+            TX_Message[1] = 0; //handshake incomplete
+            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+            Serial.println("Sent Handshake: handshake incomplete, something plugged in on west");
+
+            //handle your own handshake variables
+            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+            hsState.moduleMap.clear();
+            xSemaphoreGive(hsState.mutex);
+          }
+          handshakeComplete.store(false, std::memory_order_release);
+          westMost = false;
+        }
+      }
+
+      if (eastMost){
+        //look out for a east signal, if detected means something has plugged in 
+        if(eastDetect){
+          if(position != -99){
+            TX_Message[0] = 0x44; // 'C'
+            TX_Message[1] = 0; //handshake incomplete
+            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+            Serial.println("Sent Handshake: handshake incomplete, something plugged in on east");
+
+            //handle your own handshake variables
+            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+            hsState.moduleMap.clear();
+            xSemaphoreGive(hsState.mutex);
+          }
+          handshakeComplete.store(false, std::memory_order_release);
+          eastMost = false;
+        }
+      }
+
+      secondWest = false;
+      secondEast = false;
+
+      if (position == 1){
+        secondWest = true;
+        Serial.println("I am Second West");
+      }
+
+      else if (position == (mapSize - 2)){
+        secondEast = true;
+        Serial.println("I am Second East");
+      }
+
+      //if you are second west, you are responsible for sending message if the westmost module disconnects
+      if(secondWest){
+        if(!westDetect){
+          TX_Message[0] = 0x44; // 'C'
+          TX_Message[1] = 0; //handshake incomplete
+          xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+          Serial.println("Sent Handshake: handshake incomplete, westmost module disconnected");
+
+          //handle your own handshake variables
+          xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+          hsState.moduleMap.clear();
+          xSemaphoreGive(hsState.mutex);
+          
+          handshakeComplete.store(false, std::memory_order_release);
+        }
+      }
+
+      if(secondEast){
+        if(!eastDetect){
+          TX_Message[0] = 0x44; // 'C'
+          TX_Message[1] = 0; //handshake incomplete
+          xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+          Serial.println("Sent Handshake: handshake incomplete, eastmost module disconnected");
+
+          //handle your own handshake variables
+          xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+          hsState.moduleMap.clear();
+          xSemaphoreGive(hsState.mutex);
+          
+          handshakeComplete.store(false, std::memory_order_release);
+       } 
+      }
+    }
+  }
+}
+
 
 void setup() {
   // put your setup code here, to run once:
@@ -486,15 +864,10 @@ void setup() {
   #endif
 
   //Initialise CAN
-  CAN_Init(true);
+  CAN_Init(false);
   setCANFilter(0x123, 0x7FF);
-  #ifdef receiver
   CAN_RegisterRX_ISR(CAN_RX_ISR);
-  #endif
-
-  #ifdef sender
   CAN_RegisterTX_ISR(CAN_TX_ISR);
-  #endif
   CAN_Start();
 
   msgInQ = xQueueCreate(36,8); //(number of items, size of each item)
@@ -506,9 +879,39 @@ void setup() {
     "scanKeys",		/* Text name for the task */
     512,      		/* Stack size in words, not bytes */
     NULL,			/* Parameter passed into the task */
-    4,			/* Task priority, higher value = higher priority*/
+    5,			/* Task priority, higher value = higher priority*/
     &scanKeysHandle /* Pointer to store the task handle */
   );	
+
+  TaskHandle_t  decodeHandle = NULL; 
+  xTaskCreate(
+    decodeTask,		/* Function that implements the task */
+    "decode RX",		/* Text name for the task */
+    512,      		/* Stack size in words, not bytes */
+    NULL,			/* Parameter passed into the task */
+    4,			/* Task priority */
+    &decodeHandle /* Pointer to store the task handle */
+  );
+
+  TaskHandle_t  CAN_TXHandle = NULL; 
+  xTaskCreate(
+    CAN_TX_Task,		/* Function that implements the task */
+    "CAN_TX",		/* Text name for the task */
+    256,      		/* Stack size in words, not bytes */
+    NULL,			/* Parameter passed into the task */
+    3,			/* Task priority */
+    &CAN_TXHandle /* Pointer to store the task handle */
+  );
+
+  TaskHandle_t  handshakeHandle = NULL; 
+  xTaskCreate(
+    handshakeTask,		/* Function that implements the task */
+    "handshake",		/* Text name for the task */
+    256,      		/* Stack size in words, not bytes */
+    NULL,			/* Parameter passed into the task */
+    2,			/* Task priority */
+    &handshakeHandle /* Pointer to store the task handle */
+  );
 
   TaskHandle_t displayUpdateHandle = NULL; 
   xTaskCreate(
@@ -520,31 +923,8 @@ void setup() {
     &displayUpdateHandle /* Pointer to store the task handle */
   );
 
-  #ifdef receiver
-  TaskHandle_t  decodeHandle = NULL; 
-  xTaskCreate(
-    decodeTask,		/* Function that implements the task */
-    "decode RX",		/* Text name for the task */
-    512,      		/* Stack size in words, not bytes */
-    NULL,			/* Parameter passed into the task */
-    3,			/* Task priority */
-    &decodeHandle /* Pointer to store the task handle */
-  );
-  #endif
-
-  #ifdef sender
-  TaskHandle_t  CAN_TXHandle = NULL; 
-  xTaskCreate(
-    CAN_TX_Task,		/* Function that implements the task */
-    "CAN_TX",		/* Text name for the task */
-    256,      		/* Stack size in words, not bytes */
-    NULL,			/* Parameter passed into the task */
-    2,			/* Task priority */
-    &CAN_TXHandle /* Pointer to store the task handle */
-  );
-  #endif
-
   sysState.mutex = xSemaphoreCreateMutex();
+  hsState.mutex = xSemaphoreCreateMutex();
   CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
   vTaskStartScheduler();
