@@ -212,8 +212,10 @@ void sampleISR() {
 
   // volume
   Vout = Vout >> (8 - localRotation);
-     
-  analogWrite(OUTR_PIN, Vout + 128);  
+ 
+  analogWrite(OUTR_PIN, Vout + 128);
+
+  
 }
 
 void CAN_RX_ISR (void) {
@@ -242,6 +244,7 @@ void scanKeysTask(void * pvParameters) {
   uint32_t localCurrentStepSize = 0;
   uint8_t TX_Message[8] = {0};
   bool outBit;
+  int32_t waveformIndex;
 
   TX_Message[0] = 0x50;
   TX_Message[1] = 4;
@@ -249,7 +252,7 @@ void scanKeysTask(void * pvParameters) {
 
   #ifndef TEST_SCANKEYS 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 25.2/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 20/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
   #endif
@@ -278,7 +281,7 @@ void scanKeysTask(void * pvParameters) {
     xSemaphoreGive(sysState.mutex);
 
     knob3.updateRotation(localInputs);
-    int32_t waveformIndex = knob2.getWave();
+    waveformIndex = knob2.getWave();
     switch(waveformIndex) {
       case 0: CurrentWaveform = SAWTOOTH; break;
       case 1: CurrentWaveform = SINE; break;
@@ -369,9 +372,6 @@ void displayUpdateTask(void * pvParameters) {
     #endif
 
     #ifdef receiver
-    u8g2.setCursor(2,20);
-    u8g2.print("Step Size: ");
-    u8g2.print(currentStepSize);
 
     u8g2.setCursor(66,10);
     u8g2.print("Wave: ");
@@ -384,22 +384,18 @@ void displayUpdateTask(void * pvParameters) {
     localRotation = sysState.rotation;
     xSemaphoreGive(sysState.mutex);
 
-    u8g2.setCursor(2,30);
-    u8g2.print("Rotation: ");
-    u8g2.print(localRotation);
-
-    u8g2.setCursor(66,30);
+    u8g2.setCursor(2,20);
     u8g2.print((char) localRX_Message[0]);
     u8g2.print(localRX_Message[1]);
     u8g2.print(localRX_Message[2]);
-    #endif
 
     u8g2.setCursor(66,20);
     u8g2.print("Volume: ");
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     u8g2.print(sysState.rotation);
-
     xSemaphoreGive(sysState.mutex);
+
+    #endif
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
@@ -417,6 +413,10 @@ void decodeTask(void * pvParameters) {
 
   while(1){
     xQueueReceive(msgInQ, (void *)localRX_Message, portMAX_DELAY); //localRX_Message is an array which holds the returned ITEM from the queue 
+    // Serial.println("Received from queue:");
+    // Serial.print(localRX_Message[0]);
+    // Serial.print(localRX_Message[1]);
+    // Serial.println(localRX_Message[2]);
 
     //because RX_Message is a global variable, we need to use a mutex to update it 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -445,13 +445,13 @@ void decodeTask(void * pvParameters) {
     }
 
     else if(localRX_Message[0] == 0x48){ //handshake 
-      Serial.print("Received Handshake:");
-      Serial.print((char)localRX_Message[0]);
-      Serial.print(localRX_Message[1]);
-      Serial.print(localRX_Message[2]);
-      Serial.print(localRX_Message[3]);
-      Serial.print(localRX_Message[4]);
-      Serial.println(localRX_Message[5]);
+      // Serial.print("Received Handshake:");
+      // Serial.print((char)localRX_Message[0]);
+      // Serial.print(localRX_Message[1]);
+      // Serial.print(localRX_Message[2]);
+      // Serial.print(localRX_Message[3]);
+      // Serial.print(localRX_Message[4]);
+      // Serial.println(localRX_Message[5]);
 
       if(handshakeComplete.load(std::memory_order_acquire) == true){
         handshakeComplete.store(false, std::memory_order_release);
@@ -470,13 +470,13 @@ void decodeTask(void * pvParameters) {
 
     else if(localRX_Message[0] == 0x44){ //handshake 
       if (localRX_Message[1] == 1){
-        Serial.println("Received Handshake Complete from the eastmost module");
+        //Serial.println("Received Handshake Complete from the eastmost module");
         handshakeComplete.store(true, std::memory_order_release);
         __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
       }
 
       else if (localRX_Message[1] == 0){
-        Serial.println("Received Handshake Not Complete");
+        //Serial.println("Received Handshake Not Complete");
         handshakeComplete.store(false, std::memory_order_release);
         __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
 
@@ -529,7 +529,7 @@ void handshakeTask(void * pvParameters){
   TX_Message[4] = (ID >> 24) & 0xFF; 
 
   //xFrequency is the initiation interval of the task 
-  const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
+  const TickType_t xFrequency = /portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -632,6 +632,8 @@ void handshakeTask(void * pvParameters){
             TX_Message[1] = 1; //handshake complete
             xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
             Serial.println("Sent Handshake: handshake complete");
+
+            delay();
 
             //update your own handshaking signal 
             handshakeComplete.store(true, std::memory_order_release);
