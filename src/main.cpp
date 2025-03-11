@@ -201,8 +201,10 @@ HardwareTimer sampleTimer(TIM1);
 //Global variables
 volatile uint32_t currentStepSize;
 systemState sysState;
-volatile Knob knob3 = Knob(3, 0, 8, 0);
-volatile Knob knob2 = Knob(3, 2, 3, 0); // 4 waveforms for now
+volatile Knob knob3 = Knob(3, 3, 0, 8, 0);
+volatile Knob knob2 = Knob(2, 3, 2, 10, 0); // change to sustain - figure out waveforms in a bit
+volatile Knob knob1 = Knob(1, 4, 0, 500, 0); // decay
+volatile Knob knob0 = Knob(0, 4, 2, 500, 0); // attack
 QueueHandle_t msgInQ;
 QueueHandle_t msgOutQ;
 SemaphoreHandle_t CAN_TX_Semaphore;
@@ -221,8 +223,8 @@ void sampleISR() {
   // static local variable is not re-initialized on each call
   static uint32_t phaseAcc = 0;
 
-  int32_t localRotation;
-  localRotation = __atomic_load_n(&sysState.rotation, __ATOMIC_RELAXED);
+  int32_t localVolume;
+  localVolume = __atomic_load_n(&sysState.rotation[3], __ATOMIC_RELAXED);
 
   uint32_t localCurrentStepSize;
   localCurrentStepSize = __atomic_load_n(&currentStepSize, __ATOMIC_RELAXED);
@@ -245,7 +247,6 @@ void sampleISR() {
     // Vout = Vout << 8; // Scale??
   } else if (CurrentWaveform==SAWTOOTH){
     Vout = index - 128;
-    Vout = Vout * 0.5;
   } else if (CurrentWaveform==TRIANGLE){
     if (index < 128) {
       Vout = 2 * index - 128; // Rising part
@@ -255,14 +256,13 @@ void sampleISR() {
     // Vout = Vout * 1.2; // Scale??
   } else if (CurrentWaveform==SQUARE){
     Vout = (index < 128) ? -128 : 127;
-    Vout = Vout * 0.5;
   }
 
   float envelopeLevel = calculateEnvelopeLevel();
   Vout = Vout * envelopeLevel;
 
   // volume
-  Vout = Vout >> (8 - localRotation);
+  Vout = Vout >> (8 - localVolume);
 
   
   // Serial.print("Final output: ");
@@ -320,6 +320,9 @@ void scanKeysTask(void * pvParameters) {
       digitalWrite(REN_PIN,0);
     }
 
+    // Serial.print("Inputs:");
+    // Serial.println(localInputs.to_string().c_str());
+
     //Serial.println(localInputs.to_string().c_str());
 
     //take mutex to update inputs
@@ -328,16 +331,27 @@ void scanKeysTask(void * pvParameters) {
     xSemaphoreGive(sysState.mutex);
 
     knob3.updateRotation(localInputs);
-    int32_t waveformIndex = knob2.getWave();
-    switch(waveformIndex) {
-      case 0: CurrentWaveform = SAWTOOTH; break;
-      case 1: CurrentWaveform = SINE; break;
-      case 2: CurrentWaveform = TRIANGLE; break;
-      case 3: CurrentWaveform = SQUARE; break;
-    }
+    knob2.updateRotation(localInputs);
+    knob1.updateRotation(localInputs);
+    knob0.updateRotation(localInputs);
+    
+    // Serial.print("Knob Index: ");
+    // Serial.println(knob0.knobIndex);
+
+    envelope.attackTime = knob0.getRotation();
+    envelope.decayTime = knob1.getRotation();
+    envelope.sustainLevel = knob2.getRotation() / 10.0f;
+
+    // int32_t waveformIndex = knob2.getWave();
+    // switch(waveformIndex) {
+    //   case 0: CurrentWaveform = SAWTOOTH; break;
+    //   case 1: CurrentWaveform = SINE; break;
+    //   case 2: CurrentWaveform = TRIANGLE; break;
+    //   case 3: CurrentWaveform = SQUARE; break;
+    // }
 
     StepSizes = getArray();
-    knob2.updateWave(localInputs);
+    // knob2.updateWave(localInputs);
 
     currentStepIndex = getStepIndex(localInputs);
 
@@ -356,10 +370,6 @@ void scanKeysTask(void * pvParameters) {
 
           #ifdef sender
           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-          // Serial.println("Sent to queue:");
-          // Serial.print(TX_Message[0]);
-          // Serial.print(TX_Message[1]);
-          // Serial.print(TX_Message[2]);
           #endif
         }
 
@@ -388,26 +398,6 @@ void scanKeysTask(void * pvParameters) {
       }
     }
 
-    //in the case where they are the same but we continuously press a key, we should keep sending the message 
-    else{
-      if(currentStepIndex != 12){
-        TX_Message[0] = 0x50; //'P' Pressed current key 
-        TX_Message[2] = currentStepIndex;
-
-        #ifdef receiver
-        xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
-        #endif
-
-        #ifdef sender
-        xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-        // Serial.println("Sent to queue:");
-        // Serial.print(TX_Message[0]);
-        // Serial.print(TX_Message[1]);
-        // Serial.print(TX_Message[2]);
-        #endif
-      }
-    }
-
     previousStepIndex = currentStepIndex;
     previousAction = TX_Message[0];
   
@@ -418,7 +408,7 @@ void scanKeysTask(void * pvParameters) {
 }
 
 void displayUpdateTask(void * pvParameters) {
-  int32_t localRotation;
+  int32_t localRotation[3];
   int8_t localRX_Message[8];
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
@@ -439,9 +429,6 @@ void displayUpdateTask(void * pvParameters) {
     #endif
 
     #ifdef receiver
-    u8g2.setCursor(2,20);
-    u8g2.print("Step Size: ");
-    u8g2.print(currentStepSize);
 
     u8g2.setCursor(66,10);
     u8g2.print("Wave: ");
@@ -451,25 +438,31 @@ void displayUpdateTask(void * pvParameters) {
     localRX_Message[0] = sysState.RX_Message[0];
     localRX_Message[1] = sysState.RX_Message[1];
     localRX_Message[2] = sysState.RX_Message[2];
-    localRotation = sysState.rotation;
+    localRotation[3] = sysState.rotation[3];
+    localRotation[2] = sysState.rotation[2];
+    localRotation[1] = sysState.rotation[1];
+    localRotation[0] = sysState.rotation[0];
     xSemaphoreGive(sysState.mutex);
 
-    u8g2.setCursor(2,30);
-    u8g2.print("Rotation: ");
-    u8g2.print(localRotation);
+    u8g2.setCursor(2,20);
+    u8g2.print("Vol: ");
+    u8g2.print(localRotation[3]);
 
-    u8g2.setCursor(66,30);
+    u8g2.setCursor(66,20);
     u8g2.print((char) localRX_Message[0]);
     u8g2.print(localRX_Message[1]);
     u8g2.print(localRX_Message[2]);
+
+    u8g2.setCursor(3, 30);
+    u8g2.print("A: ");
+    u8g2.print(envelope.attackTime);
+    u8g2.setCursor(40, 30);
+    u8g2.print("D: ");
+    u8g2.print(envelope.decayTime);
+    u8g2.setCursor(70, 30);
+    u8g2.print("S: ");
+    u8g2.print(envelope.sustainLevel);
     #endif
-
-    u8g2.setCursor(66,20);
-    u8g2.print("Volume: ");
-    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
-    u8g2.print(sysState.rotation);
-
-    xSemaphoreGive(sysState.mutex);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
@@ -508,6 +501,8 @@ void decodeTask(void * pvParameters) {
         localCurrentStepSize = localCurrentStepSize >> (4 - octave);
       }
       __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED);
+
+      startEnvelope();
     }
 
     else if (localRX_Message[0] == 0x52){ //released
@@ -517,13 +512,13 @@ void decodeTask(void * pvParameters) {
     }
 
     else if(localRX_Message[0] == 0x48){ //handshake 
-      Serial.print("Received Handshake:");
-      Serial.print((char)localRX_Message[0]);
-      Serial.print(localRX_Message[1]);
-      Serial.print(localRX_Message[2]);
-      Serial.print(localRX_Message[3]);
-      Serial.print(localRX_Message[4]);
-      Serial.println(localRX_Message[5]);
+      // Serial.print("Received Handshake:");
+      // Serial.print((char)localRX_Message[0]);
+      // Serial.print(localRX_Message[1]);
+      // Serial.print(localRX_Message[2]);
+      // Serial.print(localRX_Message[3]);
+      // Serial.print(localRX_Message[4]);
+      // Serial.println(localRX_Message[5]);
 
       if(handshakeComplete.load(std::memory_order_acquire) == true){
         handshakeComplete.store(false, std::memory_order_release);
@@ -542,13 +537,13 @@ void decodeTask(void * pvParameters) {
 
     else if(localRX_Message[0] == 0x44){ //handshake 
       if (localRX_Message[1] == 1){
-        Serial.println("Received Handshake Complete from the eastmost module");
+        // Serial.println("Received Handshake Complete from the eastmost module");
         handshakeComplete.store(true, std::memory_order_release);
         __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
       }
 
       else if (localRX_Message[1] == 0){
-        Serial.println("Received Handshake Not Complete");
+        // Serial.println("Received Handshake Not Complete");
         handshakeComplete.store(false, std::memory_order_release);
         __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
 
@@ -725,8 +720,8 @@ void handshakeTask(void * pvParameters){
       int position = (it != hsState.moduleMap.end()) ? it->second : -99;
       xSemaphoreGive(hsState.mutex);
 
-      Serial.print("Position:");
-      Serial.println(position);
+      // Serial.print("Position:");
+      // Serial.println(position);
     
       localOctave = 4;
 
