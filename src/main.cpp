@@ -12,8 +12,11 @@
 #include <array>
 #include <cmath>
 
-#define receiver 
-// #define sender
+// #define receiver 
+#define sender
+
+#define DISABLE_THREADS
+#define TEST_SCANKEYS
 
 enum waveform {
   SAWTOOTH,
@@ -253,13 +256,18 @@ void scanKeysTask(void * pvParameters) {
   TX_Message[1] = 4;
   TX_Message[2] = 12; //initalise to be 12 
 
+  #ifndef TEST_SCANKEYS 
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 25.2/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
   TickType_t xLastWakeTime = xTaskGetTickCount();
+  #endif
 
   while (1){
+    #ifndef TEST_SCANKEYS
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    #endif
+
     localInputs.reset();
     
     // Loop through rows of key matrix and read columns
@@ -274,7 +282,13 @@ void scanKeysTask(void * pvParameters) {
       digitalWrite(REN_PIN,0);
     }
 
-    //Serial.println(localInputs.to_string().c_str());
+    #ifdef TEST_SCANKEYS
+    for (int i = 0; i < 12; i++) {
+      TX_Message[2] = i;
+      xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+    }
+    break;
+    #endif
 
     //take mutex to update inputs
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
@@ -811,21 +825,30 @@ void setup() {
   generateSineLUT();
 
   #ifdef receiver
+  #ifndef DISABLE_THREADS
   //Timer for ISR 
   sampleTimer.setOverflow(22000, HERTZ_FORMAT);
   sampleTimer.attachInterrupt(sampleISR);
   sampleTimer.resume();
   #endif
+  #endif
 
   //Initialise CAN
+  #ifndef DISABLE_THREADS
   CAN_Init(false);
   setCANFilter(0x123, 0x7FF);
   CAN_RegisterRX_ISR(CAN_RX_ISR);
   CAN_RegisterTX_ISR(CAN_TX_ISR);
   CAN_Start();
+  #endif
 
-  msgInQ = xQueueCreate(36,8); //(number of items, size of each item)
-  msgOutQ = xQueueCreate(36,8); 
+  #ifdef TEST_SCANKEYS
+  msgOutQ = xQueueCreate(384, 8);
+  #else
+  msgOutQ = xQueueCreate(36,8); //(number of items, size of each item)
+  #endif
+
+  #ifndef DISABLE_THREADS
 
   TaskHandle_t scanKeysHandle = NULL;
   xTaskCreate(
@@ -876,6 +899,17 @@ void setup() {
     1,			/* Task priority */
     &displayUpdateHandle /* Pointer to store the task handle */
   );
+  
+  #endif
+
+  #ifdef TEST_SCANKEYS
+  uint32_t startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    scanKeysTask(NULL);
+  }
+  Serial.println(micros() - startTime);
+  while(1);
+  #endif
 
   sysState.mutex = xSemaphoreCreateMutex();
   hsState.mutex = xSemaphoreCreateMutex();
