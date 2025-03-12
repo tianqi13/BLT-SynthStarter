@@ -550,6 +550,8 @@ void decodeTask(void * pvParameters) {
                break; 
            }
        }
+
+       startEnvelope();
    }
 
    else if (localRX_Message[0] == 0x52) {  // released
