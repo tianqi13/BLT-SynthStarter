@@ -35,16 +35,13 @@ enum waveform {
  SQUARE
 };
 
-
-volatile waveform CurrentWaveform = SAWTOOTH;
-
+volatile waveform CurrentWaveform = SINE;
 
 #define TABLE_SIZE 256
 
 
 // Generate a sine lookup table
 int sineLUT[TABLE_SIZE];
-
 
 void generateSineLUT() {
    int minVal = 127, maxVal = -128;
@@ -97,6 +94,15 @@ float calculateEnvelopeLevel() {
   
   envelope.currentLevel = level;
   return level;
+}
+
+const char* getWaveformName(waveform w) {
+  switch (w) {
+      case SAWTOOTH: return "SAW";
+      case SINE: return "SINE";
+      case TRIANGLE: return "TRI";
+      case SQUARE: return "SQR";
+  }
 }
 
 //Constants
@@ -219,6 +225,9 @@ QueueHandle_t msgOutQ;
 SemaphoreHandle_t CAN_TX_Semaphore;
 volatile uint32_t Octave;
 volatile uint32_t currentStepSizes[10] = {0};
+std::array<std::string, 12> pianoNotes = {
+  "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+};
 
 
 volatile bool outBits[7] = {0,0,0,1,1,1,1};
@@ -373,13 +382,13 @@ void scanKeysTask(void * pvParameters) {
       envelope.decayTime = knob1.getRotation();
       envelope.sustainLevel = knob2.getRotation() / 10.0f;
 
-       waveformIndex = knobWave.getRotation();
-       switch(waveformIndex) {
-       case 0: CurrentWaveform = SAWTOOTH; break;
-       case 1: CurrentWaveform = SINE; break;
-       case 2: CurrentWaveform = TRIANGLE; break;
-       case 3: CurrentWaveform = SQUARE; break;
-       }
+      waveformIndex = knobWave.getRotation();
+      switch(waveformIndex) {
+      case 0: __atomic_store_n(&CurrentWaveform, SAWTOOTH, __ATOMIC_RELAXED); break;
+      case 1: __atomic_store_n(&CurrentWaveform, SINE, __ATOMIC_RELAXED); break;
+      case 2: __atomic_store_n(&CurrentWaveform, TRIANGLE, __ATOMIC_RELAXED); break;
+      case 3: __atomic_store_n(&CurrentWaveform, SQUARE, __ATOMIC_RELAXED); break;
+      }
        
        knobWave.updateWave(localInputs);
 
@@ -395,7 +404,6 @@ void scanKeysTask(void * pvParameters) {
                #ifdef receiver
                xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
                #endif
-
 
                #ifdef sender
                xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
@@ -437,6 +445,8 @@ void scanKeysTask(void * pvParameters) {
 void displayUpdateTask(void * pvParameters) {
   int32_t localRotation[4];
   int8_t localRX_Message[8];
+  waveform localCurrentWaveform;
+  std::string pressedNote;
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
@@ -449,20 +459,6 @@ void displayUpdateTask(void * pvParameters) {
 
     //Update display
     u8g2.clearBuffer();         // clear the internal memory
-    u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
-    #ifdef receiver
-    u8g2.drawStr(2,10,"Receiver");
-    #endif
-
-   #ifdef sender
-   u8g2.drawStr(2,10,"Sender");
-   #endif
-
-   
-    #ifdef receiver 
-    u8g2.setCursor(66,10);
-    u8g2.print("Wave: ");
-    u8g2.print(CurrentWaveform);
 
     xSemaphoreTake(sysState.mutex, portMAX_DELAY);
     localRX_Message[0] = sysState.RX_Message[0];
@@ -475,25 +471,83 @@ void displayUpdateTask(void * pvParameters) {
     localRotation[0] = sysState.rotation[0];
     xSemaphoreGive(sysState.mutex);
 
-    u8g2.setCursor(2,20);
-    u8g2.print("Vol: ");
-    u8g2.print(localRotation[3]);
-    
-    u8g2.setCursor(66,20);
-    u8g2.print((char) localRX_Message[0]);
-    u8g2.print(localRX_Message[1]);
-    u8g2.print(localRX_Message[2]);
+    //if handshake is complete, we display as normal
+    if(handshakeComplete.load(std::memory_order_acquire) == true){
 
-    u8g2.setCursor(3, 30);
-    u8g2.print("A: ");
-    u8g2.print(envelope.attackTime);
-    u8g2.setCursor(35, 30);
-    u8g2.print("D: ");
-    u8g2.print(envelope.decayTime);
-    u8g2.setCursor(70, 30);
-    u8g2.print("S: ");
-    u8g2.print(envelope.sustainLevel);
-    #endif
+      u8g2.setFont(u8g2_font_unifont_t_76); //height 16, width 16
+      u8g2.drawGlyph(2, 11, 0x266C);	
+
+      u8g2.setFont(u8g2_font_boutique_bitmap_9x9_tf); // width 8 
+      u8g2.setCursor(14, 8);
+      u8g2.print("StackSynth"); //10 * 8 = 80 
+
+      #ifdef receiver
+      u8g2.setFont(u8g2_font_siji_t_6x10); //height 6, width 10
+
+      //draws the volume button 
+      if(localRotation[3] == 0){
+        u8g2.drawGlyph(86, 8, 0xE202);
+      }
+      else if (localRotation[3] < 5){
+        u8g2.drawGlyph(86, 8, 0xE204);	
+      }
+      else {
+        u8g2.drawGlyph(86, 8, 0xE203);	
+      }
+
+      //draws the note 
+      u8g2.drawGlyph(88, 22, 0xE271);
+
+      //volume 
+      u8g2.setFont(u8g2_font_boutique_bitmap_9x9_tf);
+      u8g2.setCursor(98, 7);
+      u8g2.print(":");
+      u8g2.print(localRotation[3]);
+
+      //wave
+      localCurrentWaveform = __atomic_load_n(&CurrentWaveform, __ATOMIC_RELAXED);
+      u8g2.setCursor(2, 20);
+      u8g2.print("Wave:");
+      u8g2.print(getWaveformName(static_cast<waveform>(localCurrentWaveform)));
+
+      //musical note
+      
+      u8g2.setCursor(98,20);
+      u8g2.print(":");
+      if (localRX_Message[0] == 0x50){
+        pressedNote = pianoNotes[localRX_Message[2]];
+        u8g2.print(localRX_Message[1]);
+        u8g2.print(pressedNote.c_str());
+      }
+
+      u8g2.setCursor(2, 31);
+      u8g2.print("A:");
+      u8g2.print(envelope.attackTime);
+      u8g2.setCursor(46, 31);
+      u8g2.print("D:");
+      u8g2.print(envelope.decayTime);
+      u8g2.setCursor(90, 31);
+      u8g2.print("S:");
+      u8g2.print(envelope.sustainLevel);
+      #endif
+
+      #ifdef sender  
+      u8g2.setCursor(20, 19);
+      u8g2.print(" Sending Notes...");
+      #endif
+    }
+    
+    else {
+      u8g2.setFont(u8g2_font_siji_t_6x10); //height 6, width 10
+      u8g2.drawGlyph(20, 20, 0xE14D);
+      u8g2.drawGlyph(95, 20, 0xE141);
+      
+      u8g2.setFont(u8g2_font_boutique_bitmap_9x9_tf); 
+      u8g2.setCursor(24, 19);  // Set cursor at the calculated X position
+      u8g2.print(" Handshaking ");             // Print the text
+
+    }
+
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
@@ -578,13 +632,13 @@ void decodeTask(void * pvParameters) {
 
 
    else if(localRX_Message[0] == 0x48){ //handshake
-     Serial.print("Received Handshake:");
-     Serial.print((char)localRX_Message[0]);
-     Serial.print(localRX_Message[1]);
-     Serial.print(localRX_Message[2]);
-     Serial.print(localRX_Message[3]);
-     Serial.print(localRX_Message[4]);
-     Serial.println(localRX_Message[5]);
+    //  Serial.print("Received Handshake:");
+    //  Serial.print((char)localRX_Message[0]);
+    //  Serial.print(localRX_Message[1]);
+    //  Serial.print(localRX_Message[2]);
+    //  Serial.print(localRX_Message[3]);
+    //  Serial.print(localRX_Message[4]);
+    //  Serial.println(localRX_Message[5]);
 
      if(handshakeComplete.load(std::memory_order_acquire) == true){
        handshakeComplete.store(false, std::memory_order_release);
@@ -603,16 +657,16 @@ void decodeTask(void * pvParameters) {
    }
 
 
-   else if(localRX_Message[0] == 0x44){ //handshake
+   else if(localRX_Message[0] == 0x44){ //Complete 
      if (localRX_Message[1] == 1){
-       Serial.println("Received Handshake Complete from the eastmost module");
+       //Serial.println("Received Handshake Complete from the eastmost module");
        handshakeComplete.store(true, std::memory_order_release);
        __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
      }
 
 
      else if (localRX_Message[1] == 0){
-       Serial.println("Received Handshake Not Complete");
+       //Serial.println("Received Handshake Not Complete");
        handshakeComplete.store(false, std::memory_order_release);
        __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
 
@@ -698,7 +752,7 @@ void handshakeTask(void * pvParameters){
 
 
      if (westDetect){
-       Serial.println("west detected");
+       //Serial.println("west detected");
        continue;
      }
   
@@ -711,12 +765,12 @@ void handshakeTask(void * pvParameters){
 
        //no west, yes east
        if (eastDetect){
-         Serial.println("east detected");
+         //Serial.println("east detected");
          //CASE1: WESTMOST MODULE 
          if (mapSize == 0) {
            TX_Message[5] = mapSize; //position is the size of the map
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-           Serial.println("Sent Handshake: westmost module");
+           //Serial.println("Sent Handshake: westmost module");
            __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
 
 
@@ -733,7 +787,7 @@ void handshakeTask(void * pvParameters){
          //map not empty
          else {
            if (inMap){
-             Serial.println("Already in map, waiting for handshake complete");
+             //Serial.println("Already in map, waiting for handshake complete");
              continue;
            }
 
@@ -742,7 +796,7 @@ void handshakeTask(void * pvParameters){
            else{
              TX_Message[5] = mapSize; //position is the size of the map
              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-             Serial.println("Sent Handshake: Middle module");
+             //Serial.println("Sent Handshake: Middle module");
              __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
 
 
@@ -759,7 +813,7 @@ void handshakeTask(void * pvParameters){
        else{
          //CASE 4: ONLY MODULE
          if (mapSize == 0){
-           Serial.println("We are the only module");
+           //Serial.println("We are the only module");
            handshakeComplete.store(true, std::memory_order_release);
            westMost = true;
            eastMost = true;
@@ -770,7 +824,7 @@ void handshakeTask(void * pvParameters){
          else{
            TX_Message[5] = mapSize; //position is the size of the map
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-           Serial.println("Sent Handshake: eastmost module");
+           //Serial.println("Sent Handshake: eastmost module");
 
 
            //append yourself to your map
@@ -782,7 +836,7 @@ void handshakeTask(void * pvParameters){
            TX_Message[0] = 0x44; // 'C'
            TX_Message[1] = 1; //handshake complete
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-           Serial.println("Sent Handshake: handshake complete");
+           //Serial.println("Sent Handshake: handshake complete");
 
 
            //update your own handshaking signal
@@ -828,7 +882,7 @@ void handshakeTask(void * pvParameters){
            TX_Message[0] = 0x44; // 'C'
            TX_Message[1] = 0; //handshake incomplete
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-           Serial.println("Sent Handshake: handshake incomplete, something plugged in on west");
+           //Serial.println("Sent Handshake: handshake incomplete, something plugged in on west");
 
 
            //handle your own handshake variables
@@ -862,7 +916,7 @@ void handshakeTask(void * pvParameters){
            TX_Message[0] = 0x44; // 'C'
            TX_Message[1] = 0; //handshake incomplete
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-           Serial.println("Sent Handshake: handshake incomplete, something plugged in on east");
+           //Serial.println("Sent Handshake: handshake incomplete, something plugged in on east");
 
 
            //handle your own handshake variables
@@ -892,7 +946,7 @@ void handshakeTask(void * pvParameters){
          TX_Message[0] = 0x44; // 'C'
          TX_Message[1] = 0; //handshake incomplete
          xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-         Serial.println("Sent Handshake: handshake incomplete, westmost module disconnected");
+         //Serial.println("Sent Handshake: handshake incomplete, westmost module disconnected");
 
 
          //handle your own handshake variables
