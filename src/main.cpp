@@ -181,8 +181,8 @@ handshakeState hsState;
 
 void sampleISR() {
    // static local variable is not re-initialized on each call
-   static uint32_t phaseAcc[4] = {0};  // Phase accumulators for each channel
-   uint32_t activeStepSizes[4] = {0};  // Stores the currently active step sizes
+   static uint32_t phaseAcc[10] = {0};  // Phase accumulators for each channel
+   uint32_t activeStepSizes[10] = {0};  // Stores the currently active step sizes
    int activeCount = 0;  // Number of currently active keys
 
 
@@ -191,7 +191,7 @@ void sampleISR() {
 
 
    // Retrieve up to 4 active key step sizes
-   for (int i = 0; i < 10 && activeCount < 4; i++) {
+   for (int i = 0; i < 10 && activeCount < 10; i++) {
        uint32_t stepSize = __atomic_load_n(&currentStepSizes[i], __ATOMIC_RELAXED);
        if (stepSize > 0) {
            activeStepSizes[activeCount] = stepSize;
