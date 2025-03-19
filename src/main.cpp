@@ -405,9 +405,6 @@ void scanKeysTask(void * pvParameters) {
       case 2: __atomic_store_n(&CurrentWaveform, TRIANGLE, __ATOMIC_RELAXED); break;
       case 3: __atomic_store_n(&CurrentWaveform, SQUARE, __ATOMIC_RELAXED); break;
       }
-       
-       knobWave.updateWave(localInputs);
-
 
        for (int i = 0; i < 12; i++){
            //Case 1: a key has been pressed
@@ -541,15 +538,19 @@ void displayUpdateTask(void * pvParameters) {
         u8g2.print(pressedNote.c_str());
       }
 
+      localEnvAttack = __atomic_load_n(&envelope.attackTime, __ATOMIC_RELAXED);
+      localEnvDecay = __atomic_load_n(&envelope.decayTime, __ATOMIC_RELAXED);
+      localEnvSustain = __atomic_load_n(&envelope.sustainLevel, __ATOMIC_RELAXED);
+
       u8g2.setCursor(2, 31);
       u8g2.print("A:");
-      u8g2.print(envelope.attackTime);
+      u8g2.print(localEnvAttack);
       u8g2.setCursor(46, 31);
       u8g2.print("D:");
-      u8g2.print(envelope.decayTime);
+      u8g2.print(localEnvDecay);
       u8g2.setCursor(90, 31);
       u8g2.print("S:");
-      u8g2.print(envelope.sustainLevel);
+      u8g2.print(localEnvSustain);
       #endif
 
       #ifdef sender  
@@ -568,10 +569,6 @@ void displayUpdateTask(void * pvParameters) {
       u8g2.print(" Handshaking ");             // Print the text
 
     }
-
-    localEnvAttack = __atomic_load_n(&envelope.attackTime, __ATOMIC_RELAXED);
-    localEnvDecay = __atomic_load_n(&envelope.decayTime, __ATOMIC_RELAXED);
-    localEnvSustain = __atomic_load_n(&envelope.sustainLevel, __ATOMIC_RELAXED);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
@@ -657,13 +654,6 @@ void decodeTask(void * pvParameters) {
 
 
    else if(localRX_Message[0] == 0x48){ //handshake
-    //  Serial.print("Received Handshake:");
-    //  Serial.print((char)localRX_Message[0]);
-    //  Serial.print(localRX_Message[1]);
-    //  Serial.print(localRX_Message[2]);
-    //  Serial.print(localRX_Message[3]);
-    //  Serial.print(localRX_Message[4]);
-    //  Serial.println(localRX_Message[5]);
 
      if(handshakeComplete.load(std::memory_order_acquire) == true){
        handshakeComplete.store(false, std::memory_order_release);
@@ -1114,6 +1104,7 @@ msgOutQ = xQueueCreate(384,8);
 
  sysState.mutex = xSemaphoreCreateMutex();
  hsState.mutex = xSemaphoreCreateMutex();
+//  envState.mutex = xSemaphoreCreateMutex();
  CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
 
