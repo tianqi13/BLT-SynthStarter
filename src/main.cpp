@@ -23,10 +23,11 @@
 //#define TEST_DECODETASK
 // #define TEST_DISPLAY
 // #define TEST_ISR
-#define TEST_HANDSHAKE // uncommented defines have not been implemented
-#define TEST_ENVELOPE
-#define TEST_CAN_TX
-#define TEST_CAN_RX
+// #define TEST_HANDSHAKE // uncommented defines have not been implemented
+// #define TEST_CAN_TX // this is not working...
+// #define TEST_CAN_RX
+// #define TEST_CAN_TX_ISR // this too
+// #define TEST_CAN_RX_ISR
 
 enum waveform {
  SAWTOOTH,
@@ -52,47 +53,55 @@ void generateSineLUT() {
 
 struct ADSEnvelope { // milliseconds
   uint32_t attackTime = 50;    
-  uint32_t decayTime = 100;
-  float sustainLevel = 0.7f;   // 0.0 to 1.0
+  uint32_t decayTime{100};
+  uint32_t sustainLevel{7};    // 0-10
   
-  float currentLevel = 0.0f;
-  uint32_t startTime = 0;
-  bool noteOn = false;
-  bool inRelease = false;
+  uint32_t currentLevel{0};
+  uint32_t startTime{0};
 };
 
 volatile ADSEnvelope envelope;
-
-void startEnvelope() {
-  envelope.startTime = millis();
-  envelope.noteOn = true;
-  envelope.inRelease = false;
-}
 
 float calculateEnvelopeLevel() {
   uint32_t currentTime = millis();
   uint32_t elapsedTime;
   float level = 0.0f;
   
-  if (envelope.noteOn) {
-    elapsedTime = currentTime - envelope.startTime;
-    
-    // Attack phase
-    if (elapsedTime < envelope.attackTime) {
-      level = (float)elapsedTime / envelope.attackTime;
-    }
-    // Decay phase
-    else if (elapsedTime < (envelope.attackTime + envelope.decayTime)) {
-      uint32_t decayElapsed = elapsedTime - envelope.attackTime;
-      level = 1.0f - ((1.0f - envelope.sustainLevel) * ((float)decayElapsed / envelope.decayTime));
-    }
-    // Sustain phase
-    else {
-      level = envelope.sustainLevel;
-    }
+  int32_t localEnvStart;
+  localEnvStart = __atomic_load_n(&envelope.startTime, __ATOMIC_RELAXED);
+
+  int32_t localAttackTime;
+  localAttackTime = __atomic_load_n(&envelope.attackTime, __ATOMIC_RELAXED);
+
+  int32_t localDecayTime;
+  localDecayTime = __atomic_load_n(&envelope.decayTime, __ATOMIC_RELAXED);
+
+  float localSustainLevel;
+  localSustainLevel = (__atomic_load_n(&envelope.sustainLevel, __ATOMIC_RELAXED) / 10.0f);
+
+  float localCurrentLevel;
+  localCurrentLevel = __atomic_load_n(&envelope.currentLevel, __ATOMIC_RELAXED) / 10.0f;  
+
+  elapsedTime = currentTime - localEnvStart;
+  
+  // Attack phase
+  if (elapsedTime < localAttackTime) {
+    level = (float)elapsedTime / localAttackTime;
+  }
+  // Decay phase
+  else if (elapsedTime < (localAttackTime + localDecayTime)) {
+    uint32_t decayElapsed = elapsedTime - localAttackTime;
+    level = 1.0f - ((1.0f - localSustainLevel) * ((float)decayElapsed / localDecayTime));
+  }
+  // Sustain phase
+  else {
+    level = localSustainLevel;
   }
   
-  envelope.currentLevel = level;
+  localCurrentLevel = level;
+
+  __atomic_store_n(&envelope.currentLevel, localCurrentLevel * 10.0f, __ATOMIC_RELAXED);
+
   return level;
 }
 
@@ -102,6 +111,7 @@ const char* getWaveformName(waveform w) {
       case SINE: return "SINE";
       case TRIANGLE: return "TRI";
       case SQUARE: return "SQR";
+      default: return "SAW";
   }
 }
 
@@ -237,8 +247,6 @@ struct handshakeState{
  SemaphoreHandle_t mutex;
 };
 handshakeState hsState;
-
-
 
 
 void sampleISR() {
@@ -377,10 +385,18 @@ void scanKeysTask(void * pvParameters) {
       knob1.updateRotation(localInputs);
       knob0.updateRotation(localInputs);
       knobWave.updateWave(localInputs);
+
+      int32_t localEnvAttack;
+      int32_t localEnvDecay;
+      int32_t localEnvSustain;
       
-      envelope.attackTime = knob0.getRotation();
-      envelope.decayTime = knob1.getRotation();
-      envelope.sustainLevel = knob2.getRotation() / 10.0f;
+      localEnvAttack = knob0.getRotation();
+      localEnvDecay = knob1.getRotation();
+      localEnvSustain = knob2.getRotation();
+
+      __atomic_store_n(&envelope.attackTime, localEnvAttack, __ATOMIC_RELAXED);
+      __atomic_store_n(&envelope.decayTime, localEnvDecay, __ATOMIC_RELAXED);
+      __atomic_store_n(&envelope.sustainLevel, localEnvSustain, __ATOMIC_RELAXED);
 
       waveformIndex = knobWave.getRotation();
       switch(waveformIndex) {
@@ -447,6 +463,11 @@ void displayUpdateTask(void * pvParameters) {
   int8_t localRX_Message[8];
   waveform localCurrentWaveform;
   std::string pressedNote;
+  
+  int32_t localEnvAttack;
+  int32_t localEnvDecay;
+  int32_t localEnvSustain;
+  
   //xFrequency is the initiation interval of the task 
   const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
   // xLastWakeTime stores the tick count of the last initiation
@@ -548,6 +569,9 @@ void displayUpdateTask(void * pvParameters) {
 
     }
 
+    localEnvAttack = __atomic_load_n(&envelope.attackTime, __ATOMIC_RELAXED);
+    localEnvDecay = __atomic_load_n(&envelope.decayTime, __ATOMIC_RELAXED);
+    localEnvSustain = __atomic_load_n(&envelope.sustainLevel, __ATOMIC_RELAXED);
 
     u8g2.sendBuffer();          // transfer internal memory to the display
 
@@ -605,7 +629,8 @@ void decodeTask(void * pvParameters) {
            }
        }
 
-       startEnvelope();
+        __atomic_store_n(&envelope.startTime, millis(), __ATOMIC_RELAXED);
+
    }
 
    else if (localRX_Message[0] == 0x52) {  // released
@@ -686,12 +711,14 @@ void decodeTask(void * pvParameters) {
 
 
 void CAN_TX_Task(void * pvParameters) {
- uint8_t msgOut[8];
-
+  uint8_t msgOut[8];
 	while (1) {
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
 		CAN_TX(0x123, msgOut);
+    #ifdef TEST_CAN_TX
+    break;
+    #endif
 	}
 }
 
@@ -1019,9 +1046,14 @@ void setup() {
  #endif
 
 
+ #ifndef TEST_CAN_TX 
  msgOutQ = xQueueCreate(36,8); //(number of items, size of each item)
+ #endif
  msgInQ = xQueueCreate(36, 8);
 
+#ifdef TEST_CAN_TX
+msgOutQ = xQueueCreate(384,8); 
+#endif
 
  #ifndef DISABLE_THREADS
 
@@ -1091,7 +1123,7 @@ void setup() {
    scanKeysTask(NULL);
  }
  float final_time = micros() - startTime;
- Serial.print("Worst Case Time for ScanKeys (ms): ");
+ Serial.print("Worst Case Time for ScanKeys (us): ");
  Serial.println(final_time/32000);
  while(1);
  #endif
@@ -1115,7 +1147,7 @@ void setup() {
   }
 
   float final_time = micros() - startTime;
-  Serial.print("Worst Case Time for DecodeTask (ms): ");
+  Serial.print("Worst Case Time for DecodeTask (us): ");
   Serial.println(final_time/36000);
 
   while(1);
@@ -1139,6 +1171,59 @@ void setup() {
   }
   float final_time = micros() - startTime;
   Serial.print("Worst Case Time for Display Update: ");
+  Serial.println(final_time/32);
+  while(1);
+  #endif
+
+  // #ifdef TEST_CAN_TX
+  
+  // uint8_t msgOut[8] = {0};
+  // for (int i = 0; i < 36; i++) {
+  //   xQueueSend(msgOutQ, msgOut, portMAX_DELAY);
+  // }
+  
+  // float startTime = micros();
+  // for (int iter = 0; iter < 36; iter++) {
+  //   CAN_TX_Task(NULL);
+  //   Serial.println(iter);
+  // }
+  // float final_time = micros() - startTime;
+  // Serial.print("Worst Case Time for CAN TX (micros): ");
+  // Serial.println(final_time/36);
+  // while(1);
+  // #endif
+
+  #ifdef TEST_CAN_TX
+  uint8_t msgOut[8] = {0};
+  for (int i = 0; i < 36; i++) {
+    xQueueSend(msgOutQ, msgOut, portMAX_DELAY);
+  }
+
+  float startTime = micros();
+  for (int iter = 0; iter < 36; iter++) {
+    xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
+    xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
+    CAN_TX(0x123, msgOut);
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for CAN TX (us): ");
+  Serial.println(final_time / 36);
+  while (1);
+  #endif
+
+  #ifdef TEST_CAN_TX_ISR
+  uint8_t msgOut[8] = {0};
+  for (int i = 0; i < 36; i++) {
+    xQueueSend(msgOutQ, msgOut, portMAX_DELAY);
+  }
+  Serial.println("Sent messages to queue");
+  float startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    Serial.println(iter);
+    CAN_TX_ISR();
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for CAN TX ISR: ");
   Serial.println(final_time/32);
   while(1);
   #endif

@@ -17,6 +17,8 @@ and synchronisation
 # Recording and playback?
 # Reverb and echo?
 
+
+
 Real-time Analysis
 Data and Resource Sharing
 Inter-task dependencies
