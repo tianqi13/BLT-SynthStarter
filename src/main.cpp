@@ -18,10 +18,10 @@
 
 #define DISABLE_THREADS
 // #define TEST_SCANKEYS
-// #define TEST_DECODETASK
+#define TEST_DECODETASK
 // #define TEST_DISPLAY
 // #define TEST_ISR
-#define TEST_HANDSHAKE 
+// #define TEST_HANDSHAKE 
 // #define TEST_CAN_TX 
 // #define TEST_CAN_TX_ISR
 // #define TEST_CAN_RX_ISR
@@ -631,8 +631,6 @@ void decodeTask(void * pvParameters) {
            uint32_t stepSize = __atomic_load_n(&currentStepSizes[i], __ATOMIC_RELAXED);
            if (stepSize == 0) {
                __atomic_store_n(&currentStepSizes[i], localCurrentStepSize, __ATOMIC_RELAXED);
-               // Serial.print("Step size added ");
-               // Serial.println(i);
                break; 
            }
        }
@@ -656,8 +654,6 @@ void decodeTask(void * pvParameters) {
            uint32_t stepSize = __atomic_load_n(&currentStepSizes[i], __ATOMIC_RELAXED);
            if (stepSize == localCurrentStepSize) {
                __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
-               // Serial.print("Step size removed ");
-               // Serial.println(i);
                break; 
            }
        }
@@ -1133,23 +1129,22 @@ void setup() {
   for (int iter = 0; iter < 36; iter++) {
     uint8_t TX_Message[8] = {0};
     
-    // Possible values
     uint8_t options[] = {0x44, 0x48, 0x50, 0x52};
 
-    // Randomly select one of the four values
+    // randomly select to fill queue
     TX_Message[0] = options[rand() % 4];
 
     xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
   }
 
   float startTime = micros();
-  for (int iter = 0; iter < 36; iter++) {
+  while (uxQueueMessagesWaiting(msgInQ) > 0) {
     decodeTask(NULL);
   }
 
   float final_time = micros() - startTime;
   Serial.print("Worst Case Time for DecodeTask (ms): ");
-  Serial.println(final_time/36000);
+  Serial.println(final_time/1000);
 
   while(1);
   #endif
