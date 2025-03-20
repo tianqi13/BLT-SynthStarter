@@ -13,9 +13,36 @@
 #include <array>
 #include <cmath>
 
-#define receiver
-// #define sender
+// #define receiver
+#define sender
 
+// for measuring execution time - disable threads and select one test
+// #define DISABLE_THREADS
+// #define TEST_SCANKEYS
+// #define TEST_DECODETASK
+// #define TEST_DISPLAY
+// #define TEST_ISR
+// #define TEST_HANDSHAKE 
+// #define TEST_CAN_TX 
+// #define TEST_CAN_TX_ISR
+// #define TEST_CAN_RX_ISR
+
+uint32_t test_CAN_TX(uint32_t id, uint8_t *data) {
+  (void)id;
+  (void)data;
+  return 0;
+}
+#define CAN_TX test_CAN_TX
+
+#ifdef TEST_CAN_TX_ISR
+#undef xSemaphoreGiveFromISR
+#define xSemaphoreGiveFromISR(sem, pxHigherPriorityTaskWoken) xSemaphoreGive(sem)
+#endif
+
+#ifdef TEST_CAN_RX_ISR
+#undef xQueueSendFromISR
+#define xQueueSendFromISR(queue, item, pxHigherPriorityTaskWoken) xQueueSend(queue, item, 0)
+#endif
 
 //Constants
  const uint32_t interval = 100; //Display update interval
@@ -304,10 +331,16 @@ void sampleISR() {
 }
 
 void CAN_RX_ISR (void) {
+ #ifndef TEST_CAN_RX_ISR
  uint8_t RX_Message_ISR[8];
  uint32_t ID;
  CAN_RX(ID, RX_Message_ISR);
  xQueueSendFromISR(msgInQ, RX_Message_ISR, NULL);
+ #endif
+ #ifdef TEST_CAN_RX_ISR
+ uint8_t dummyRX[8] = {0};
+ xQueueSendFromISR(msgInQ, dummyRX, NULL);
+ #endif
 }
 
 
@@ -329,14 +362,18 @@ void scanKeysTask(void * pvParameters) {
  TX_Message[1] = 4;
  TX_Message[2] = 12; //initalise to be 12
 
+ #ifndef TEST_SCANKEYS
  //xFrequency is the initiation interval of the task
  const TickType_t xFrequency = 20/portTICK_PERIOD_MS;
  // xLastWakeTime stores the tick count of the last initiation
  TickType_t xLastWakeTime = xTaskGetTickCount();
+ #endif
 
 
  while (1){
+  #ifndef TEST_SCANKEYS
    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  #endif
 
    localInputs.reset();
   
@@ -385,6 +422,10 @@ void scanKeysTask(void * pvParameters) {
       }
 
        for (int i = 0; i < 12; i++){
+          #ifdef TEST_SCANKEYS
+          localInputs[i] = 0;
+          previousLocalInputs[i] = 1;
+          #endif
            //Case 1: a key has been pressed
            if((localInputs[i] == 0) && (previousLocalInputs[i] == 1)){
                TX_Message[0] = 0x50; //'P' Pressed current key
@@ -423,6 +464,9 @@ void scanKeysTask(void * pvParameters) {
        previousLocalInputs = localInputs;
    }
 
+   #ifdef TEST_SCANKEYS
+   break;
+   #endif
  }
 }
 
@@ -443,7 +487,9 @@ void displayUpdateTask(void * pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while (1){
+    #ifndef TEST_DISPLAY
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    #endif
 
     //Update display
     u8g2.clearBuffer();         // clear the internal memory
@@ -544,6 +590,10 @@ void displayUpdateTask(void * pvParameters) {
 
     //Toggle LED
     digitalToggle(LED_BUILTIN);
+
+    #ifdef TEST_DISPLAY
+    break;
+    #endif
     }
 }
 
@@ -639,27 +689,52 @@ void decodeTask(void * pvParameters) {
      else if (localRX_Message[1] == 0){
        handshakeComplete.store(false, std::memory_order_release);
        __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
-       
+
+
        xSemaphoreTake(hsState.mutex, portMAX_DELAY);
        hsState.moduleMap.clear();
        xSemaphoreGive(hsState.mutex);
 
        //clear all notes being recorded 
-        for (int i = 0; i < 10; i++) {
-          __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
-        }
+       for (int i = 0; i < 10; i++) {
+        __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
       }
-    }
-  }
+     }
+   }
+
+   #ifdef TEST_DECODETASK
+   break;
+   #endif
+
+ }
 }
 
 
 void CAN_TX_Task(void * pvParameters) {
   uint8_t msgOut[8];
 	while (1) {
+    #ifndef TEST_CAN_TX
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
 		CAN_TX(0x123, msgOut);
+    #endif
+
+    #ifdef TEST_CAN_TX
+    const int iters = 36;
+    for (int i = 0; i < iters; i++) {
+         for (int j = 0; j < 8; j++) {
+             msgOut[j] = 0xFF; 
+         }
+         if(xSemaphoreTake(CAN_TX_Semaphore, 0) == pdTRUE) {
+            CAN_TX(0x123, msgOut);
+         } else {
+            xSemaphoreGive(CAN_TX_Semaphore);
+            xSemaphoreTake(CAN_TX_Semaphore, 0);
+            CAN_TX(0x123, msgOut);
+         }
+    }
+    break;
+    #endif
 	}
 }
 
@@ -699,7 +774,9 @@ void handshakeTask(void * pvParameters){
  TickType_t xLastWakeTime = xTaskGetTickCount();
 
  while (1){
+   #ifndef TEST_HANDSHAKE
    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+   #endif
 
    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
    localInputs = sysState.inputs;
@@ -718,6 +795,22 @@ void handshakeTask(void * pvParameters){
    TX_Message[3] = (ID >> 16) & 0xFF;
    TX_Message[4] = (ID >> 24) & 0xFF;
 
+   #ifdef TEST_HANDSHAKE
+    // handshake complete
+    handshakeComplete.store(true, std::memory_order_release);
+
+    // populate the map with multiple entries so its a complex scenario
+    xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+    hsState.moduleMap.clear();
+    for (int i = 0; i < 10; i++) {  // eg 10 connected modules
+        hsState.moduleMap[i] = i;  
+    }
+    hsState.moduleMap[ID] = 5; // assume this module is in position 5
+    xSemaphoreGive(hsState.mutex);
+
+    westDetect = true;
+    eastDetect = true;
+    #endif
   
    if(handshakeComplete.load(std::memory_order_acquire) == false){
      delayMicroseconds(3);
@@ -834,18 +927,18 @@ void handshakeTask(void * pvParameters){
         else if (waitStabilise == 1){
           timeNow = millis();
           if (timeNow - lastRecordedTime > 500){
-            if(position != -99){
-              TX_Message[0] = 0x44; // 'C'
-              TX_Message[1] = 0; //handshake incomplete
-              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-   
-              //handle your own handshake variables
-              xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-              hsState.moduleMap.clear();
-              xSemaphoreGive(hsState.mutex);
-            }
-            handshakeComplete.store(false, std::memory_order_release);
-            westMost = false;
+         if(position != -99){
+           TX_Message[0] = 0x44; // 'C'
+           TX_Message[1] = 0; //handshake incomplete
+           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+
+           //handle your own handshake variables
+           xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+           hsState.moduleMap.clear();
+           xSemaphoreGive(hsState.mutex);
+         }
+         handshakeComplete.store(false, std::memory_order_release);
+         westMost = false;
             waitStabilise = 0;
           }
         }
@@ -879,18 +972,18 @@ void handshakeTask(void * pvParameters){
         else if (waitStabilise == 1){
           timeNow = millis();
           if (timeNow - lastRecordedTime > 500){
-            if(position != -99){
-              TX_Message[0] = 0x44; // 'C'
-              TX_Message[1] = 0; //handshake incomplete
-              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-   
-              //handle your own handshake variables
-              xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-              hsState.moduleMap.clear();
-              xSemaphoreGive(hsState.mutex);
-            }
-            handshakeComplete.store(false, std::memory_order_release);
-            eastMost = false;
+         if(position != -99){
+           TX_Message[0] = 0x44; // 'C'
+           TX_Message[1] = 0; //handshake incomplete
+           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+
+           //handle your own handshake variables
+           xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+           hsState.moduleMap.clear();
+           xSemaphoreGive(hsState.mutex);
+         }
+         handshakeComplete.store(false, std::memory_order_release);
+         eastMost = false;
             waitStabilise = 0;
           }
         }
@@ -932,34 +1025,11 @@ void handshakeTask(void * pvParameters){
        }
      }
    }
+   #ifdef TEST_HANDSHAKE
+   break;
+   #endif
  }
 }
-
-
-void printCPUUsage() {
-  TaskStatus_t *pxTaskStatusArray;
-  volatile UBaseType_t uxArraySize, x;
-  uint32_t ulTotalRunTime;
-
-  uxArraySize = uxTaskGetNumberOfTasks();
-
-  pxTaskStatusArray = (TaskStatus_t *)pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
-
-  if (pxTaskStatusArray != NULL) {
-    uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
-
-    Serial.println("Task\t\tCPU Usage (%)");
-    for (x = 0; x < uxArraySize; x++) {
-      Serial.print(pxTaskStatusArray[x].pcTaskName);
-      Serial.print("\t\t");
-      Serial.println((pxTaskStatusArray[x].ulRunTimeCounter * 100) / ulTotalRunTime);
-    }
-
-    // Free the allocated memory
-    vPortFree(pxTaskStatusArray);
-  }
-}
-
 
 void setup() {
  // put your setup code here, to run once:
@@ -998,24 +1068,34 @@ void setup() {
 
 
  #ifdef receiver
+ #ifndef DISABLE_THREADS
  //Timer for ISR
  sampleTimer.setOverflow(22000, HERTZ_FORMAT);
  sampleTimer.attachInterrupt(sampleISR);
  sampleTimer.resume();
  #endif
+ #endif
 
 
  //Initialise CAN
+ #ifndef DISABLE_THREADS
  CAN_Init(false);
  setCANFilter(0x123, 0x7FF);
  CAN_RegisterRX_ISR(CAN_RX_ISR);
  CAN_RegisterTX_ISR(CAN_TX_ISR);
  CAN_Start();
+ #endif
 
-
- msgOutQ = xQueueCreate(36,8); //(number of items, size of each item)
+ #ifndef TEST_SCANKEYS
+ msgOutQ = xQueueCreate(36, 8); //(number of items, size of each item)
  msgInQ = xQueueCreate(36, 8);
+ #endif
+ #ifdef TEST_SCANKEYS
+ msgOutQ = xQueueCreate(384, 8);
+ msgInQ = xQueueCreate(384, 8);
+ #endif
 
+ #ifndef DISABLE_THREADS
 
  TaskHandle_t scanKeysHandle = NULL;
  xTaskCreate(
@@ -1070,13 +1150,117 @@ void setup() {
    1,      /* Task priority */
    &displayUpdateHandle /* Pointer to store the task handle */
  );
+ #endif
 
  sysState.mutex = xSemaphoreCreateMutex();
  hsState.mutex = xSemaphoreCreateMutex();
  CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
- vTaskStartScheduler();
 
+ #ifdef TEST_SCANKEYS
+ float startTime = micros();
+ for (int iter = 0; iter < 32; iter++) {
+   scanKeysTask(NULL);
+ }
+ float final_time = micros() - startTime;
+ Serial.print("Worst Case Time for ScanKeys (ms): ");
+ Serial.println(final_time/32000);
+ while(1);
+ #endif
+
+  #ifdef TEST_DECODETASK
+  for (int iter = 0; iter < 36; iter++) {
+    uint8_t TX_Message[8] = {0};
+    
+    uint8_t options[] = {0x44, 0x48, 0x50, 0x52};
+
+    // randomly select to fill queue
+    TX_Message[0] = options[rand() % 4];
+
+    xQueueSend(msgInQ, TX_Message, portMAX_DELAY);
+  }
+
+  float startTime = micros();
+  while (uxQueueMessagesWaiting(msgInQ) > 0) {
+    decodeTask(NULL);
+  }
+
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for DecodeTask (ms): ");
+  Serial.println(final_time/1000);
+
+  while(1);
+  #endif
+
+  #ifdef TEST_ISR
+  float startTime = micros();
+  for (int iter = 0; iter < 1000; iter++) {
+    sampleISR();
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for sampleISR (microseconds): ");
+  Serial.println(final_time/1000);
+  while(1);
+  #endif
+
+  #ifdef TEST_DISPLAY
+  float startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    displayUpdateTask(NULL);
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for Display Update (ms): ");
+  Serial.println(final_time/32000);
+  while(1);
+  #endif
+
+  #ifdef TEST_HANDSHAKE
+  float startTime = micros();
+  for (int iter = 0; iter < 32; iter++) {
+    handshakeTask(NULL);
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for Handshake (ms): ");
+  Serial.println(final_time/32000);
+  while(1);
+  #endif
+
+  #ifdef TEST_CAN_TX
+  float startTime = micros();
+  for (int iter = 0; iter < 36; iter++) {
+    CAN_TX_Task(NULL);
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for CAN TX (ms): ");
+  Serial.println(final_time / 36000);
+  while (1);
+  #endif
+
+  #ifdef TEST_CAN_TX_ISR
+  float startTime = micros();
+  for (int iter = 0; iter < 1000; iter++) {
+    CAN_TX_ISR();
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for CAN TX ISR (microseconds): ");
+  Serial.println(final_time/1000);
+  while(1);
+  #endif
+
+  #ifdef TEST_CAN_RX_ISR
+  float startTime = micros();
+  for (int iter = 0; iter < 1000; iter++) {
+    CAN_RX_ISR();
+  }
+  float final_time = micros() - startTime;
+  Serial.print("Worst Case Time for CAN RX ISR (microseconds): ");
+  Serial.println(final_time/1000);
+  while(1);
+  #endif
+
+  #ifndef DISABLE_THREADS
+  vTaskStartScheduler();
+  #endif
 }
 
 void loop() {}
