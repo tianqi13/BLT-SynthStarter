@@ -13,12 +13,12 @@
 #include <array>
 #include <cmath>
 
-#define receiver
-// #define sender
+// #define receiver
+#define sender
 
 // for measuring execution time - disable threads and select one test
-#define DISABLE_THREADS
-#define TEST_SCANKEYS
+// #define DISABLE_THREADS
+// #define TEST_SCANKEYS
 // #define TEST_DECODETASK
 // #define TEST_DISPLAY
 // #define TEST_ISR
