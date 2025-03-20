@@ -158,3 +158,22 @@ The synthesizer output can be adjusted using the following controls. Any changes
 Safe accesses to global variables and synchronisation is done through the use of Mutexes and Atomic Stores/Loads. 
 
 ### Inter-task dependencies 
+In our design, global variables are accessed using mutexes and atomic loads/stores to ensure tasks can be synchronised and concurrent resource accesses are thread-safe.
+
+However, if a task holds a mutex and another task tries to take the mutex, the task is blocked until data can be accessed. This can lead to deadlocks, and our code avoids deadlocks in the following ways: 
+1. A mutex is taken only to copy global variables to a local variable, and after data copy the mutex is immediately released. 
+2. Data processing happens with local variables, rarely with global variables. 
+One example is our handshake task, which runs this while loop:
+
+![Alt Text](img/dependency_eg.png)
+
+We take the mutex, copy the inputs to a local variable, and give the mutex. We then use this local variable for all our downstream tasks. This ensures that there are no dependencies between tasks, and no thread is kept waiting forever. This structure works for our design because downstream processing for each task is kept separate from other tasks. For example, the handshake task only deals with handshaking, and the decode task only deals with decoding incoming messages. Therefore, there is rarely a need for data to be passed between threads and for the main thread to wait for a reply, reducing the possibility of a deadlock. 
+
+![Alt Text](img/final.png)
+
+However, potential deadlock can occur externally. One such dependency occurs in handshaking, where in the case where a module B is plugged to the East of module A, A is responsible for sending the ‘handshake restart’ signal onto the CAN bus. There are 3 things A does:
+1. [Loop 1] (if there are other modules connected to the west of A) It sends a restart signal to the CAN bus in the form of a ‘C0’ message, which stands for restart handshaking. 
+2. [Loop 1] It updates its own handshaking complete status to 0. 
+3. [Loop 2] It is the west most module, so it sends a message denoting its 0 position. 
+4. [Loop 2] It sets outBits[6] (the east handshaking signal) to 0. 
+
