@@ -749,10 +749,6 @@ void handshakeTask(void * pvParameters){
 
        //no west, yes east
        if (eastDetect){
-<<<<<<< HEAD
-=======
-
->>>>>>> 98f3ecdd2f9fa2e6660e847c0e264497a565ea21
          //CASE1: WESTMOST MODULE 
          if (mapSize == 0) {
            TX_Message[5] = mapSize; //position is the size of the map
@@ -881,10 +877,6 @@ void handshakeTask(void * pvParameters){
            TX_Message[0] = 0x44; // 'C'
            TX_Message[1] = 0; //handshake incomplete
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-<<<<<<< HEAD
-=======
-
->>>>>>> 98f3ecdd2f9fa2e6660e847c0e264497a565ea21
 
            //handle your own handshake variables
            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
