@@ -639,15 +639,18 @@ void decodeTask(void * pvParameters) {
      else if (localRX_Message[1] == 0){
        handshakeComplete.store(false, std::memory_order_release);
        __atomic_store_n(&outBits[6], 1, __ATOMIC_RELAXED);
-
-
+       
        xSemaphoreTake(hsState.mutex, portMAX_DELAY);
        hsState.moduleMap.clear();
        xSemaphoreGive(hsState.mutex);
-     };
-   }
 
- }
+       //clear all notes being recorded 
+        for (int i = 0; i < 10; i++) {
+          __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
+        }
+      }
+    }
+  }
 }
 
 
@@ -676,6 +679,9 @@ void handshakeTask(void * pvParameters){
   bool westMost = false; 
   bool eastMost = false;
   uint32_t localOctave;
+  bool waitStabilise = false; 
+  int lastRecordedTime = 0;
+  int timeNow = 0;
 
 
  int32_t handshakeSymbol = 0x48; //'H'
@@ -821,18 +827,28 @@ void handshakeTask(void * pvParameters){
      if (westMost){
        //look out for a west signal, if detected means something has plugged in
        if(westDetect){
-         if(position != -99){
-           TX_Message[0] = 0x44; // 'C'
-           TX_Message[1] = 0; //handshake incomplete
-           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-
-           //handle your own handshake variables
-           xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-           hsState.moduleMap.clear();
-           xSemaphoreGive(hsState.mutex);
-         }
-         handshakeComplete.store(false, std::memory_order_release);
-         westMost = false;
+        if(waitStabilise == 0){
+          waitStabilise = 1;
+          lastRecordedTime = millis();
+        }
+        else if (waitStabilise == 1){
+          timeNow = millis();
+          if (timeNow - lastRecordedTime > 500){
+            if(position != -99){
+              TX_Message[0] = 0x44; // 'C'
+              TX_Message[1] = 0; //handshake incomplete
+              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+   
+              //handle your own handshake variables
+              xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+              hsState.moduleMap.clear();
+              xSemaphoreGive(hsState.mutex);
+            }
+            handshakeComplete.store(false, std::memory_order_release);
+            westMost = false;
+            waitStabilise = 0;
+          }
+        }
        }
       
        //if you are the west most AND not the only module, look out for disconnects on your east
@@ -845,6 +861,10 @@ void handshakeTask(void * pvParameters){
            xSemaphoreGive(hsState.mutex);
           
            handshakeComplete.store(false, std::memory_order_release);
+
+          for (int i = 0; i < 10; i++) {
+            __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
+          }
          }
        }
      }
@@ -852,18 +872,28 @@ void handshakeTask(void * pvParameters){
      if (eastMost){
        //look out for a east signal, if detected means something has plugged in
        if(eastDetect){
-         if(position != -99){
-           TX_Message[0] = 0x44; // 'C'
-           TX_Message[1] = 0; //handshake incomplete
-           xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
-
-           //handle your own handshake variables
-           xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-           hsState.moduleMap.clear();
-           xSemaphoreGive(hsState.mutex);
-         }
-         handshakeComplete.store(false, std::memory_order_release);
-         eastMost = false;
+        if(waitStabilise == 0){
+          waitStabilise = 1;
+          lastRecordedTime = millis();
+        }
+        else if (waitStabilise == 1){
+          timeNow = millis();
+          if (timeNow - lastRecordedTime > 500){
+            if(position != -99){
+              TX_Message[0] = 0x44; // 'C'
+              TX_Message[1] = 0; //handshake incomplete
+              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+   
+              //handle your own handshake variables
+              xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+              hsState.moduleMap.clear();
+              xSemaphoreGive(hsState.mutex);
+            }
+            handshakeComplete.store(false, std::memory_order_release);
+            eastMost = false;
+            waitStabilise = 0;
+          }
+        }
        }
 
 
@@ -873,6 +903,10 @@ void handshakeTask(void * pvParameters){
            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
            hsState.moduleMap.clear();
            xSemaphoreGive(hsState.mutex);
+
+           for (int i = 0; i < 10; i++) {
+            __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
+           } 
           
            handshakeComplete.store(false, std::memory_order_release);
          }
@@ -889,6 +923,10 @@ void handshakeTask(void * pvParameters){
          xSemaphoreTake(hsState.mutex, portMAX_DELAY);
          hsState.moduleMap.clear();
          xSemaphoreGive(hsState.mutex);
+
+         for (int i = 0; i < 10; i++) {
+          __atomic_store_n(&currentStepSizes[i], 0, __ATOMIC_RELAXED);
+         }
         
          handshakeComplete.store(false, std::memory_order_release);
        }
