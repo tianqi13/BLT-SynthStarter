@@ -194,13 +194,14 @@ enum waveform {
   TRIANGLE,
   SQUARE
  };
+int sineLUT[TABLE_SIZE];
 
 //Global variables and objects
 
 //For System State, including inputs, rotation values and RX message
 systemState sysState;
 volatile Knob knob3 = Knob(3, 3, 0, 8, 0); // volume
-volatile Knob knob2 = Knob(2, 3, 2, 10, 0); // change to sustain - figure out waveforms in a bit
+volatile Knob knob2 = Knob(2, 3, 2, 10, 0); // sustain
 volatile Knob knob1 = Knob(1, 4, 0, 500, 0); // decay
 volatile Knob knob0 = Knob(0, 4, 2, 500, 0); // attack
 
@@ -210,7 +211,6 @@ volatile uint32_t currentStepSizes[10] = {0};
 //For waveform generation
 volatile Knob knobWave = Knob(4, 5, 1, 3, 0); // waveform - when knob3 is pressed
 volatile waveform CurrentWaveform = SINE;
-int sineLUT[TABLE_SIZE];
 
 //For Messages 
 QueueHandle_t msgInQ;
@@ -252,7 +252,7 @@ void sampleISR() {
   uint32_t localCurrentWaveform;
   localCurrentWaveform = __atomic_load_n(&CurrentWaveform, __ATOMIC_RELAXED);
 
-   // Retrieve up to 4 active key step sizes
+   // Retrieve up to 10 active key step sizes
    for (int i = 0; i < 10 && activeCount < 10; i++) {
        uint32_t stepSize = __atomic_load_n(&currentStepSizes[i], __ATOMIC_RELAXED);
        if (stepSize > 0) {
