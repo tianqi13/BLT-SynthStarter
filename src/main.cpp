@@ -94,6 +94,61 @@ void setROW(uint8_t rowIdx){
 //Timer
 HardwareTimer sampleTimer(TIM1);
 
+//Constant arrays or enumerations
+std::array<std::string, 12> pianoNotes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+enum waveform {
+  SAWTOOTH,
+  SINE,
+  TRIANGLE,
+  SQUARE
+ };
+
+#define TABLE_SIZE 256
+int sineLUT[TABLE_SIZE];
+
+//Global variables and objects
+
+//For System State, including inputs, rotation values and RX message
+systemState sysState;
+volatile Knob knob3 = Knob(3, 3, 0, 8, 0); // volume
+volatile Knob knob2 = Knob(2, 3, 2, 10, 0); // sustain
+volatile Knob knob1 = Knob(1, 4, 0, 500, 0); // decay
+volatile Knob knob0 = Knob(0, 4, 2, 500, 0); // attack
+
+//For note generation
+volatile uint32_t currentStepSizes[10] = {0};
+
+//For waveform generation
+volatile Knob knobWave = Knob(4, 5, 1, 3, 0); // waveform - when knob3 is pressed
+volatile waveform CurrentWaveform = SINE;
+
+//For Messages 
+QueueHandle_t msgInQ;
+QueueHandle_t msgOutQ;
+SemaphoreHandle_t CAN_TX_Semaphore;
+
+//For Handshaking 
+volatile uint32_t Octave;
+volatile bool outBits[7] = {0,0,0,1,1,1,1};
+std::atomic<bool> handshakeComplete{false};
+struct handshakeState{
+ std::unordered_map<uint32_t, int> moduleMap;
+ SemaphoreHandle_t mutex;
+};
+handshakeState hsState;
+
+//For ADS Envelope
+struct ADSEnvelope { // milliseconds
+  uint32_t attackTime = 50;    
+  uint32_t decayTime{100};
+  uint32_t sustainLevel{7};    // 0-10
+  
+  uint32_t currentLevel{0};
+  uint32_t startTime{0};
+};
+volatile ADSEnvelope envelope;
+
+
 //Functions 
 //Function to generate step sizes array 
 constexpr std::array<uint32_t, 13> getArray() {
@@ -118,6 +173,9 @@ constexpr std::array<uint32_t, 13> getArray() {
   result[12] = 0x0;
   return result;
  }
+
+ 
+std::array<uint32_t, 13> StepSizes = getArray();
 
  //Function to return waveform name
 const char* getWaveformName(waveform w) {
@@ -175,7 +233,6 @@ float calculateEnvelopeLevel() {
 }
 
 // Function to generate a sine lookup table
-#define TABLE_SIZE 256
 void generateSineLUT() {
    int minVal = 127, maxVal = -128;
    for (int i = 0; i < TABLE_SIZE; i++) {
@@ -183,58 +240,6 @@ void generateSineLUT() {
    }
 }
 
-//Constant arrays or enumerations
-std::array<uint32_t, 13> StepSizes = getArray();
-std::array<std::string, 12> pianoNotes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-enum waveform {
-  SAWTOOTH,
-  SINE,
-  TRIANGLE,
-  SQUARE
- };
-int sineLUT[TABLE_SIZE];
-
-//Global variables and objects
-
-//For System State, including inputs, rotation values and RX message
-systemState sysState;
-volatile Knob knob3 = Knob(3, 3, 0, 8, 0); // volume
-volatile Knob knob2 = Knob(2, 3, 2, 10, 0); // sustain
-volatile Knob knob1 = Knob(1, 4, 0, 500, 0); // decay
-volatile Knob knob0 = Knob(0, 4, 2, 500, 0); // attack
-
-//For note generation
-volatile uint32_t currentStepSizes[10] = {0};
-
-//For waveform generation
-volatile Knob knobWave = Knob(4, 5, 1, 3, 0); // waveform - when knob3 is pressed
-volatile waveform CurrentWaveform = SINE;
-
-//For Messages 
-QueueHandle_t msgInQ;
-QueueHandle_t msgOutQ;
-SemaphoreHandle_t CAN_TX_Semaphore;
-
-//For Handshaking 
-volatile uint32_t Octave;
-volatile bool outBits[7] = {0,0,0,1,1,1,1};
-std::atomic<bool> handshakeComplete{false};
-struct handshakeState{
- std::unordered_map<uint32_t, int> moduleMap;
- SemaphoreHandle_t mutex;
-};
-handshakeState hsState;
-
-//For ADS Envelope
-struct ADSEnvelope { // milliseconds
-  uint32_t attackTime = 50;    
-  uint32_t decayTime{100};
-  uint32_t sustainLevel{7};    // 0-10
-  
-  uint32_t currentLevel{0};
-  uint32_t startTime{0};
-};
-volatile ADSEnvelope envelope;
 
 
 // ISRs
@@ -299,16 +304,10 @@ void sampleISR() {
 }
 
 void CAN_RX_ISR (void) {
- #ifndef TEST_CAN_RX_ISR
  uint8_t RX_Message_ISR[8];
  uint32_t ID;
  CAN_RX(ID, RX_Message_ISR);
  xQueueSendFromISR(msgInQ, RX_Message_ISR, NULL);
- #endif
- #ifdef TEST_CAN_RX_ISR
- uint8_t dummyRX[8] = {0};
- xQueueSendFromISR(msgInQ, dummyRX, NULL);
- #endif
 }
 
 
@@ -655,7 +654,6 @@ void decodeTask(void * pvParameters) {
 void CAN_TX_Task(void * pvParameters) {
   uint8_t msgOut[8];
 	while (1) {
-    #ifndef TEST_CAN_TX
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
 		CAN_TX(0x123, msgOut);
@@ -695,9 +693,7 @@ void handshakeTask(void * pvParameters){
  TickType_t xLastWakeTime = xTaskGetTickCount();
 
  while (1){
-  #ifndef TEST_HANDSHAKE // worst case if its complete + search through to find own position + detect new thing so send message
    vTaskDelayUntil(&xLastWakeTime, xFrequency);
-  #endif
 
    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
    localInputs = sysState.inputs;
@@ -715,23 +711,6 @@ void handshakeTask(void * pvParameters){
    TX_Message[2] = (ID >> 8) & 0xFF;
    TX_Message[3] = (ID >> 16) & 0xFF;
    TX_Message[4] = (ID >> 24) & 0xFF;
-
-   #ifdef TEST_HANDSHAKE
-    // handshake complete
-    handshakeComplete.store(true, std::memory_order_release);
-
-    // populate the map with multiple entries so its a complex scenario
-    xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-    hsState.moduleMap.clear();
-    for (int i = 0; i < 10; i++) {  // eg 10 connected modules
-        hsState.moduleMap[i] = i;  
-    }
-    hsState.moduleMap[ID] = 5; // assume this module is in position 5
-    xSemaphoreGive(hsState.mutex);
-
-    westDetect = true;
-    eastDetect = true;
-    #endif
 
   
    if(handshakeComplete.load(std::memory_order_acquire) == false){
@@ -915,9 +894,6 @@ void handshakeTask(void * pvParameters){
        }
      }
    }
-  #ifdef TEST_HANDSHAKE
-  break;
-  #endif
  }
 }
 
@@ -1061,8 +1037,8 @@ void setup() {
  hsState.mutex = xSemaphoreCreateMutex();
  CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
+ vTaskStartScheduler();
+
 }
 
-
 void loop() {}
-
