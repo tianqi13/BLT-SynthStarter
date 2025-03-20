@@ -304,16 +304,10 @@ void sampleISR() {
 }
 
 void CAN_RX_ISR (void) {
- #ifndef TEST_CAN_RX_ISR
  uint8_t RX_Message_ISR[8];
  uint32_t ID;
  CAN_RX(ID, RX_Message_ISR);
  xQueueSendFromISR(msgInQ, RX_Message_ISR, NULL);
- #endif
- #ifdef TEST_CAN_RX_ISR
- uint8_t dummyRX[8] = {0};
- xQueueSendFromISR(msgInQ, dummyRX, NULL);
- #endif
 }
 
 
@@ -699,9 +693,7 @@ void handshakeTask(void * pvParameters){
  TickType_t xLastWakeTime = xTaskGetTickCount();
 
  while (1){
-  #ifndef TEST_HANDSHAKE // worst case if its complete + search through to find own position + detect new thing so send message
    vTaskDelayUntil(&xLastWakeTime, xFrequency);
-  #endif
 
    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
    localInputs = sysState.inputs;
@@ -719,23 +711,6 @@ void handshakeTask(void * pvParameters){
    TX_Message[2] = (ID >> 8) & 0xFF;
    TX_Message[3] = (ID >> 16) & 0xFF;
    TX_Message[4] = (ID >> 24) & 0xFF;
-
-   #ifdef TEST_HANDSHAKE
-    // handshake complete
-    handshakeComplete.store(true, std::memory_order_release);
-
-    // populate the map with multiple entries so its a complex scenario
-    xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-    hsState.moduleMap.clear();
-    for (int i = 0; i < 10; i++) {  // eg 10 connected modules
-        hsState.moduleMap[i] = i;  
-    }
-    hsState.moduleMap[ID] = 5; // assume this module is in position 5
-    xSemaphoreGive(hsState.mutex);
-
-    westDetect = true;
-    eastDetect = true;
-    #endif
 
   
    if(handshakeComplete.load(std::memory_order_acquire) == false){
@@ -919,9 +894,6 @@ void handshakeTask(void * pvParameters){
        }
      }
    }
-  #ifdef TEST_HANDSHAKE
-  break;
-  #endif
  }
 }
 
