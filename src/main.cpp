@@ -16,9 +16,10 @@
 #define receiver
 // #define sender
 
-#define DISABLE_THREADS
+// for measuring execution time - disable threads and select one test
+// #define DISABLE_THREADS
 // #define TEST_SCANKEYS
-#define TEST_DECODETASK
+// #define TEST_DECODETASK
 // #define TEST_DISPLAY
 // #define TEST_ISR
 // #define TEST_HANDSHAKE 
@@ -1155,7 +1156,7 @@ void setup() {
     sampleISR();
   }
   float final_time = micros() - startTime;
-  Serial.print("Worst Case Time for sampleISR: ");
+  Serial.print("Worst Case Time for sampleISR (microseconds): ");
   Serial.println(final_time/1000);
   while(1);
   #endif
@@ -1166,7 +1167,7 @@ void setup() {
     displayUpdateTask(NULL);
   }
   float final_time = micros() - startTime;
-  Serial.print("Worst Case Time for Display Update: ");
+  Serial.print("Worst Case Time for Display Update (ms): ");
   Serial.println(final_time/32000);
   while(1);
   #endif
@@ -1177,7 +1178,7 @@ void setup() {
     handshakeTask(NULL);
   }
   float final_time = micros() - startTime;
-  Serial.print("Worst Case Time for Handshake: ");
+  Serial.print("Worst Case Time for Handshake (ms): ");
   Serial.println(final_time/32000);
   while(1);
   #endif
@@ -1199,7 +1200,7 @@ void setup() {
     CAN_TX_ISR();
   }
   float final_time = micros() - startTime;
-  Serial.print("Worst Case Time for CAN TX ISR (us): ");
+  Serial.print("Worst Case Time for CAN TX ISR (microseconds): ");
   Serial.println(final_time/1000);
   while(1);
   #endif
@@ -1210,7 +1211,7 @@ void setup() {
     CAN_RX_ISR();
   }
   float final_time = micros() - startTime;
-  Serial.print("Worst Case Time for CAN RX ISR (us): ");
+  Serial.print("Worst Case Time for CAN RX ISR (microseconds): ");
   Serial.println(final_time/1000);
   while(1);
   #endif
