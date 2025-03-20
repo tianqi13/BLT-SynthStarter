@@ -1,4 +1,5 @@
 # ES CW2 - BLT Synthesiser
+This repository 
 
 ## **Video Demonstration**
 [![Watch the video](https://img.youtube.com/vi/Vbp6IoA4slY/maxresdefault.jpg)](https://youtu.be/Vbp6IoA4slY)

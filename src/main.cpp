@@ -801,19 +801,7 @@ void handshakeTask(void * pvParameters){
    TX_Message[4] = (ID >> 24) & 0xFF;
 
    #ifdef TEST_HANDSHAKE
-    // handshake complete
-    handshakeComplete.store(true, std::memory_order_release);
-
-    // populate the map with multiple entries so its a complex scenario
-    xSemaphoreTake(hsState.mutex, portMAX_DELAY);
-    hsState.moduleMap.clear();
-    for (int i = 0; i < 10; i++) {  // eg 10 connected modules
-        hsState.moduleMap[i] = i;  
-    }
-    hsState.moduleMap[ID] = 5; // assume this module is in position 5
-    xSemaphoreGive(hsState.mutex);
-
-    westDetect = true;
+   //worst case scenario is that it is the west most module and has to wait 0.5s for signal to stabilise
     eastDetect = true;
     #endif
   
