@@ -27,12 +27,14 @@
 // #define TEST_CAN_TX_ISR
 // #define TEST_CAN_RX_ISR
 
+#ifdef DISABLE_THREADS
 uint32_t test_CAN_TX(uint32_t id, uint8_t *data) {
   (void)id;
   (void)data;
   return 0;
 }
 #define CAN_TX test_CAN_TX
+#endif
 
 #ifdef TEST_CAN_TX_ISR
 #undef xSemaphoreGiveFromISR
