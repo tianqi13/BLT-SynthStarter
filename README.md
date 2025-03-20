@@ -169,6 +169,14 @@ One example is our handshake task, which runs this while loop:
 
 We take the mutex, copy the inputs to a local variable, and give the mutex. We then use this local variable for all our downstream tasks. This ensures that there are no dependencies between tasks, and no thread is kept waiting forever. This structure works for our design because downstream processing for each task is kept separate from other tasks. For example, the handshake task only deals with handshaking, and the decode task only deals with decoding incoming messages. Therefore, there is rarely a need for data to be passed between threads and for the main thread to wait for a reply, reducing the possibility of a deadlock. 
 
+The main source of dependencies occur due to the 2 queues. All tasks reading or writing to both the msgInQ and msgOutQ have dependencies on them - Tasks reading from a queue wait indefinitely until a message is received, should the queue be empty, entering a blocked state. Similarly, tasks writing to a queue wait indefinitely for space to become available on the queue, should it be full. 
+
+The CAN_TX_Task has an additional dependency after recieving a message as it attempts to take CAN_TX_Semaphore, causing the task to be indefinitely blocked until CAN_TX_ISR gives the semaphore, which can only be done when one of the 3 outgoing mailboxes are freed up.
+
+![Alt Text](img/dependency.png)
+
+The graph, however, is not cyclical, and thus does not have a possibility for deadlock.
+
 ![Alt Text](img/final.png)
 
 However, potential deadlock can occur externally. One such dependency occurs in handshaking, where in the case where a module B is plugged to the East of module A, A is responsible for sending the ‘handshake restart’ signal onto the CAN bus. There are 3 things A does:
