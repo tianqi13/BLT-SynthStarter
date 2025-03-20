@@ -998,32 +998,6 @@ void handshakeTask(void * pvParameters){
  }
 }
 
-
-void printCPUUsage() {
-  TaskStatus_t *pxTaskStatusArray;
-  volatile UBaseType_t uxArraySize, x;
-  uint32_t ulTotalRunTime;
-
-  uxArraySize = uxTaskGetNumberOfTasks();
-
-  pxTaskStatusArray = (TaskStatus_t *)pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
-
-  if (pxTaskStatusArray != NULL) {
-    uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
-
-    Serial.println("Task\t\tCPU Usage (%)");
-    for (x = 0; x < uxArraySize; x++) {
-      Serial.print(pxTaskStatusArray[x].pcTaskName);
-      Serial.print("\t\t");
-      Serial.println((pxTaskStatusArray[x].ulRunTimeCounter * 100) / ulTotalRunTime);
-    }
-
-    // Free the allocated memory
-    vPortFree(pxTaskStatusArray);
-  }
-}
-
-
 void setup() {
  // put your setup code here, to run once:
 
@@ -1245,8 +1219,6 @@ void setup() {
   Serial.println(final_time/1000);
   while(1);
   #endif
-
-  printCPUUsage();
 
   #ifndef DISABLE_THREADS
   vTaskStartScheduler();
