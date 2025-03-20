@@ -94,10 +94,8 @@ void setROW(uint8_t rowIdx){
 //Timer
 HardwareTimer sampleTimer(TIM1);
 
-
 //Constant arrays or enumerations
 std::array<std::string, 12> pianoNotes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-
 enum waveform {
   SAWTOOTH,
   SINE,
@@ -176,7 +174,8 @@ constexpr std::array<uint32_t, 13> getArray() {
   return result;
  }
 
- std::array<uint32_t, 13> StepSizes = getArray();
+ 
+std::array<uint32_t, 13> StepSizes = getArray();
 
  //Function to return waveform name
 const char* getWaveformName(waveform w) {
@@ -240,6 +239,8 @@ void generateSineLUT() {
        sineLUT[i] = (int)(127 * sinf(2 * M_PI * i / TABLE_SIZE));
    }
 }
+
+
 
 // ISRs
 void sampleISR() {
@@ -859,7 +860,7 @@ void handshakeTask(void * pvParameters){
          westMost = false;
        }
       
-       //if you are the west most AND not the only module, looks out for disconnects on your east
+       //if you are the west most AND not the only module, look out for disconnects on your east
        //but once disconnected you are the only module, so no need to send message
        if(position != -99){
          if(!eastDetect){
@@ -923,6 +924,32 @@ void handshakeTask(void * pvParameters){
   #endif
  }
 }
+
+
+void printCPUUsage() {
+  TaskStatus_t *pxTaskStatusArray;
+  volatile UBaseType_t uxArraySize, x;
+  uint32_t ulTotalRunTime;
+
+  uxArraySize = uxTaskGetNumberOfTasks();
+
+  pxTaskStatusArray = (TaskStatus_t *)pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
+
+  if (pxTaskStatusArray != NULL) {
+    uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
+
+    Serial.println("Task\t\tCPU Usage (%)");
+    for (x = 0; x < uxArraySize; x++) {
+      Serial.print(pxTaskStatusArray[x].pcTaskName);
+      Serial.print("\t\t");
+      Serial.println((pxTaskStatusArray[x].ulRunTimeCounter * 100) / ulTotalRunTime);
+    }
+
+    // Free the allocated memory
+    vPortFree(pxTaskStatusArray);
+  }
+}
+
 
 void setup() {
  // put your setup code here, to run once:
@@ -1042,6 +1069,4 @@ void setup() {
 
 }
 
-
 void loop() {}
-
