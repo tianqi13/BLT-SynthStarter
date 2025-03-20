@@ -168,7 +168,7 @@ The synthesizer output can be adjusted using the following controls. Any changes
 | Total     |  | | 61.9928 | 62.12 |
 
 ### Deadlines and CPU utilisation
-**Total latency is 62.12ms**, less than the latency of the lowest priority task, which is displayUpdateTask with an initiation interval of 100ms ($\tau_n$). As the calculations are based on maximum execution times, this indicates that all deadlines are met under worst case conditions. The total CPU usage is **61.99%**.
+**Total latency is 61.9928ms**, less than the latency of the lowest priority task, which is displayUpdateTask with an initiation interval of 100ms ($\tau_n$). As the calculations are based on maximum execution times, this indicates that all deadlines are met under worst case conditions. The total CPU usage is **62.12%**.
 
 ## Shared Data Structures and Safe Access
 ### Shared variables for System State, Note/Waveform/Volume Control
