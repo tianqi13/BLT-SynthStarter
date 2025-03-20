@@ -185,3 +185,5 @@ However, potential deadlock can occur externally. One such dependency occurs in 
 3. [Loop 2] It is the west most module, so it sends a message denoting its 0 position. 
 4. [Loop 2] It sets outBits[6] (the east handshaking signal) to 0. 
 
+## Video Demonstration
+[![Watch the video](https://img.youtube.com/vi/IdfJ3ZTwxfk/maxresdefault.jpg)](https://youtu.be/IdfJ3ZTwxfk)
