@@ -17,8 +17,8 @@
 // #define sender
 
 // for measuring execution time - disable threads and select one test
-// #define DISABLE_THREADS
-// #define TEST_SCANKEYS
+#define DISABLE_THREADS
+#define TEST_SCANKEYS
 // #define TEST_DECODETASK
 // #define TEST_DISPLAY
 // #define TEST_ISR
@@ -367,13 +367,13 @@ void scanKeysTask(void * pvParameters) {
  const TickType_t xFrequency = 20/portTICK_PERIOD_MS;
  // xLastWakeTime stores the tick count of the last initiation
  TickType_t xLastWakeTime = xTaskGetTickCount();
- endif
+ #endif
 
 
  while (1){
   #ifndef TEST_SCANKEYS
    vTaskDelayUntil(&xLastWakeTime, xFrequency);
-   #endif
+  #endif
 
    localInputs.reset();
   
@@ -422,6 +422,10 @@ void scanKeysTask(void * pvParameters) {
       }
 
        for (int i = 0; i < 12; i++){
+          #ifdef TEST_SCANKEYS
+          localInputs[i] = 0;
+          previousLocalInputs[i] = 1;
+          #endif
            //Case 1: a key has been pressed
            if((localInputs[i] == 0) && (previousLocalInputs[i] == 1)){
                TX_Message[0] = 0x50; //'P' Pressed current key
@@ -1082,9 +1086,14 @@ void setup() {
  CAN_Start();
  #endif
 
+ #ifndef TEST_SCANKEYS
  msgOutQ = xQueueCreate(36, 8); //(number of items, size of each item)
  msgInQ = xQueueCreate(36, 8);
-
+ #endif
+ #ifdef TEST_SCANKEYS
+ msgOutQ = xQueueCreate(384, 8);
+ msgInQ = xQueueCreate(384, 8);
+ #endif
 
  #ifndef DISABLE_THREADS
 
