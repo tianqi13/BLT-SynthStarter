@@ -1,7 +1,7 @@
 # ES CW2 - BLT Synthesiser
 
 ## **Video Demonstration**
-[![Watch the video](https://img.youtube.com/vi/IdfJ3ZTwxfk/maxresdefault.jpg)](https://youtu.be/IdfJ3ZTwxfk)
+[![Watch the video](https://img.youtube.com/vi/Vbp6IoA4slY/maxresdefault.jpg)](https://youtu.be/Vbp6IoA4slY)
 
 ## **Core Functionalities**  
 ### **1. Plays note upon keypress**  
