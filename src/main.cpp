@@ -802,7 +802,10 @@ void handshakeTask(void * pvParameters){
 
    #ifdef TEST_HANDSHAKE
    //worst case scenario is that it is the west most module and has to wait 0.5s for signal to stabilise
-    eastDetect = true;
+   handshakeComplete.store(false, std::memory_order_release);
+   eastDetect = true;
+   westDetect = false;
+
     #endif
   
     if(handshakeComplete.load(std::memory_order_acquire) == false){
@@ -816,13 +819,16 @@ void handshakeTask(void * pvParameters){
        bool inMap = hsState.moduleMap.find(ID) != hsState.moduleMap.end();
        xSemaphoreGive(hsState.mutex);
 
+       #ifdef TEST_HANDSHAKE
+       mapSize = 0;
+       #endif
 
        //no west, yes east
        if (eastDetect){
          //CASE1: WESTMOST MODULE 
          if (mapSize == 0) {
            //delay to ensure that connection has stabilised
-           delayMicroseconds(500000);
+           delayMicroseconds(500);
            TX_Message[5] = mapSize; //position is the size of the map
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
            __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
@@ -834,6 +840,7 @@ void handshakeTask(void * pvParameters){
 
            //make myself westmost
            westMost = true;
+           
          }
         
          //map not empty
@@ -912,10 +919,10 @@ void handshakeTask(void * pvParameters){
        if(westDetect){
         if(waitStabiliseWest == 0){
           waitStabiliseWest = 1;
-          lastRecordedTimeWest = millis();
+          lastRecordedTimeWest = micros();
         }
         else if (waitStabiliseWest == 1){
-          timeNowWest = millis();
+          timeNowWest = micros();
           if (timeNowWest - lastRecordedTimeWest > 500){
          if(position != -99){
            TX_Message[0] = 0x44; // 'C'
@@ -962,10 +969,10 @@ void handshakeTask(void * pvParameters){
        if(eastDetect){
         if(waitStabiliseEast == 0){
           waitStabiliseEast = 1;
-          lastRecordedTimeEast = millis();
+          lastRecordedTimeEast = micros();
         }
         else if (waitStabiliseEast == 1){
-          timeNowEast = millis();
+          timeNowEast = micros();
           if (timeNowEast - lastRecordedTimeEast > 500){
          if(position != -99){
            TX_Message[0] = 0x44; // 'C'
