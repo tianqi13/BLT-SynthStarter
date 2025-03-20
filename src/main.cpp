@@ -10,10 +10,8 @@
 #include <ES_CAN.h>
 #include <atomic>
 
-
 #include <array>
 #include <cmath>
-
 
 #define receiver
 // #define sender
@@ -301,10 +299,16 @@ void sampleISR() {
 }
 
 void CAN_RX_ISR (void) {
+ #ifndef TEST_CAN_RX_ISR
  uint8_t RX_Message_ISR[8];
  uint32_t ID;
  CAN_RX(ID, RX_Message_ISR);
  xQueueSendFromISR(msgInQ, RX_Message_ISR, NULL);
+ #endif
+ #ifdef TEST_CAN_RX_ISR
+ uint8_t dummyRX[8] = {0};
+ xQueueSendFromISR(msgInQ, dummyRX, NULL);
+ #endif
 }
 
 
@@ -348,7 +352,6 @@ void scanKeysTask(void * pvParameters) {
      localInputs |= (colState << (i * 4));
      digitalWrite(REN_PIN,0);
    }
-
 
    if(localInputs != previousLocalInputs){
        //take mutex to update inputs
@@ -652,6 +655,7 @@ void decodeTask(void * pvParameters) {
 void CAN_TX_Task(void * pvParameters) {
   uint8_t msgOut[8];
 	while (1) {
+    #ifndef TEST_CAN_TX
 		xQueueReceive(msgOutQ, msgOut, portMAX_DELAY);
 		xSemaphoreTake(CAN_TX_Semaphore, portMAX_DELAY);
 		CAN_TX(0x123, msgOut);
@@ -686,16 +690,18 @@ void handshakeTask(void * pvParameters){
 
 
  //xFrequency is the initiation interval of the task
- const TickType_t xFrequency = 100/portTICK_PERIOD_MS;
+ const TickType_t xFrequency = 80/portTICK_PERIOD_MS;
  // xLastWakeTime stores the tick count of the last initiation
  TickType_t xLastWakeTime = xTaskGetTickCount();
 
  while (1){
+  #ifndef TEST_HANDSHAKE // worst case if its complete + search through to find own position + detect new thing so send message
    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  #endif
+
    xSemaphoreTake(sysState.mutex, portMAX_DELAY);
    localInputs = sysState.inputs;
    xSemaphoreGive(sysState.mutex);
-
 
    //check for handshake inputs
    //West detect = Row 5 Col 3
@@ -709,11 +715,27 @@ void handshakeTask(void * pvParameters){
    TX_Message[2] = (ID >> 8) & 0xFF;
    TX_Message[3] = (ID >> 16) & 0xFF;
    TX_Message[4] = (ID >> 24) & 0xFF;
+
+   #ifdef TEST_HANDSHAKE
+    // handshake complete
+    handshakeComplete.store(true, std::memory_order_release);
+
+    // populate the map with multiple entries so its a complex scenario
+    xSemaphoreTake(hsState.mutex, portMAX_DELAY);
+    hsState.moduleMap.clear();
+    for (int i = 0; i < 10; i++) {  // eg 10 connected modules
+        hsState.moduleMap[i] = i;  
+    }
+    hsState.moduleMap[ID] = 5; // assume this module is in position 5
+    xSemaphoreGive(hsState.mutex);
+
+    westDetect = true;
+    eastDetect = true;
+    #endif
+
   
    if(handshakeComplete.load(std::memory_order_acquire) == false){
      delayMicroseconds(3);
-
-
      if (westDetect){
        continue;
      }
@@ -727,19 +749,20 @@ void handshakeTask(void * pvParameters){
 
        //no west, yes east
        if (eastDetect){
+<<<<<<< HEAD
+=======
 
+>>>>>>> 98f3ecdd2f9fa2e6660e847c0e264497a565ea21
          //CASE1: WESTMOST MODULE 
          if (mapSize == 0) {
            TX_Message[5] = mapSize; //position is the size of the map
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
            __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
 
-
            //append yourself to your map
            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
            hsState.moduleMap[ID] = mapSize;
            xSemaphoreGive(hsState.mutex);
-
 
            //make myself westmost
            westMost = true;
@@ -751,13 +774,11 @@ void handshakeTask(void * pvParameters){
              continue;
            }
 
-
            //CASE 2: MIDDLE MODULE 
            else{
              TX_Message[5] = mapSize; //position is the size of the map
              xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
              __atomic_store_n(&outBits[6], 0, __ATOMIC_RELAXED);
-
 
              //append yourself to your map
              xSemaphoreTake(hsState.mutex, portMAX_DELAY);
@@ -777,7 +798,6 @@ void handshakeTask(void * pvParameters){
            eastMost = true;
          }
 
-
          //CASE 3: EASTMOST MODULE
          else{
            TX_Message[5] = mapSize; //position is the size of the map
@@ -796,13 +816,11 @@ void handshakeTask(void * pvParameters){
            //update your own handshaking signal
            handshakeComplete.store(true, std::memory_order_release);
 
-
            eastMost = true;
          }
        }
      }
    }
-
 
    // Complete handshake
    // we either plug in on the westmost or eastmost module
@@ -833,7 +851,6 @@ void handshakeTask(void * pvParameters){
            TX_Message[1] = 0; //handshake incomplete
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
 
-
            //handle your own handshake variables
            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
            hsState.moduleMap.clear();
@@ -857,7 +874,6 @@ void handshakeTask(void * pvParameters){
        }
      }
 
-
      if (eastMost){
        //look out for a east signal, if detected means something has plugged in
        if(eastDetect){
@@ -865,7 +881,10 @@ void handshakeTask(void * pvParameters){
            TX_Message[0] = 0x44; // 'C'
            TX_Message[1] = 0; //handshake incomplete
            xQueueSend(msgOutQ, TX_Message, portMAX_DELAY);
+<<<<<<< HEAD
+=======
 
+>>>>>>> 98f3ecdd2f9fa2e6660e847c0e264497a565ea21
 
            //handle your own handshake variables
            xSemaphoreTake(hsState.mutex, portMAX_DELAY);
@@ -904,13 +923,40 @@ void handshakeTask(void * pvParameters){
        }
      }
    }
+  #ifdef TEST_HANDSHAKE
+  break;
+  #endif
  }
+}
+
+
+void printCPUUsage() {
+  TaskStatus_t *pxTaskStatusArray;
+  volatile UBaseType_t uxArraySize, x;
+  uint32_t ulTotalRunTime;
+
+  uxArraySize = uxTaskGetNumberOfTasks();
+
+  pxTaskStatusArray = (TaskStatus_t *)pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
+
+  if (pxTaskStatusArray != NULL) {
+    uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
+
+    Serial.println("Task\t\tCPU Usage (%)");
+    for (x = 0; x < uxArraySize; x++) {
+      Serial.print(pxTaskStatusArray[x].pcTaskName);
+      Serial.print("\t\t");
+      Serial.println((pxTaskStatusArray[x].ulRunTimeCounter * 100) / ulTotalRunTime);
+    }
+
+    // Free the allocated memory
+    vPortFree(pxTaskStatusArray);
+  }
 }
 
 
 void setup() {
  // put your setup code here, to run once:
-
 
  //Set pin directions
  pinMode(RA0_PIN, OUTPUT);
@@ -1021,10 +1067,10 @@ void setup() {
 
  sysState.mutex = xSemaphoreCreateMutex();
  hsState.mutex = xSemaphoreCreateMutex();
-//  envState.mutex = xSemaphoreCreateMutex();
  CAN_TX_Semaphore = xSemaphoreCreateCounting(3,3); //(Max count, initial count)
 
 }
+
 
 void loop() {}
 
