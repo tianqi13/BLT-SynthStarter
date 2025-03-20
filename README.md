@@ -1,5 +1,15 @@
 # ES CW2 - BLT Synthesiser
-This repository 
+This repository contains the code and report done by group BLT for Embedded Systems ELEC60013 Music Synthesiser Project. 
+
+This report covers:
+1. [Video Demo](#video-demonstration)
+2. [Core Functionalities](#core-functionalities)
+3. [Advanced Features](#advanced-features)
+3. [Tasks](#tasks----threads-and-interrupts)
+4. [Initiation Intervals and Execution Time](#initiation-intervals-and-execution-time)
+5. [Real Time System Analysis](#real-time-system-analysis)
+6. [Shared Data Structures and Safe Access](#shared-data-structures-and-safe-access)
+7. [Intertask Dependencies](#inter-task-dependencies)
 
 ## **Video Demonstration**
 [![Watch the video](https://img.youtube.com/vi/IdfJ3ZTwxfk/maxresdefault.jpg)](https://youtu.be/IdfJ3ZTwxfk)
@@ -128,16 +138,16 @@ The synthesizer output can be adjusted using the following controls. Any changes
 | handshakeTask | 2 | 80.0 | Needs to have higher priority than displayUpdateTask, because handshakeTask controls what should be output on screen. However, since changes in handshaking are slow (time taken to piece together 2 modules or remove a module is tens of seconds), so should be lower than CAN_TX_Task.|
 | displayUpdateTask | 1 |100 | Lowest priority and longest initiation interval. LED in function set to blink every 100ms as per specification. |
 | CAN_TX_ISR | - | 1.6 | CAN_TX_Task sends a message every 1.6ms, so semaphore must be given back every 1.6ms as well so messages can be continuously transmitted. |
-| CAN_RX_ISR | - | 1.6 | CA message can be transmitted every 0.7ms, and each message needs to be acknowledged. So the initiation interval should be 0.7ms. |
+| CAN_RX_ISR | - | 0.7 | CA message can be transmitted every 0.7ms, and each message needs to be acknowledged. So the initiation interval should be 0.7ms. |
 | sampleISR | - |0.04545 | Frequency of ISR timer is set to 22kHz, thus initiation interval = 1/22kHz.|
 
 ### Maximum Measured Execution time 
 | Task | Maximum execution time $T_i$ /ms | Assumptions and Calculation | 
 |----------|----------|----------|
-| scanKeysTask | 0.18 | Simulate 12 keys being pressed at once, 12 messages sent. |
+| scanKeysTask | 0.21 | Simulate 12 keys being pressed at once, 12 messages sent. |
 | decodeTask  | 0.67 | The queue is pre-filled with 36 messages, and decodeTask is run until the queue is empty. |
 | CAN_TX_Task | 0.16 | Queue messages for simulation and prevent semaphores from hanging by setting 0 ticks. Added testing CAN_TX for simulation. |
-| handshakeTask | 0.13 | Critical path is performing search through the module map for own position, and to send a message if a plug in is detected.|
+| handshakeTask | 0.52 | Critical path is performing search through the module map for own position, and to send a message if a plug in is detected.|
 | displayUpdateTask | 14.93 | Time taken to update whole display |
 | CAN_TX_ISR | 0.0015 | Simulate with xSemaphoreGive (instead of xSemaphoreGiveFromISR )so that functionality and timing can be tested without requiring the full RTOS setup |
 | CAN_RX_ISR | 0.0017 | Simulate with xQueueSend (instead of xQueueSendFromISR)so that functionality and timing can be tested without requiring the full RTOS setup |
@@ -150,15 +160,15 @@ The synthesizer output can be adjusted using the following controls. Any changes
 | scanKeysTask | 20 | 0.21 | 1.05 | 1.05 |
 | decodeTask  | 25.2 | 0.67 | 2.68 | 2.66 |
 | CAN_TX_Task | 57.6 | 0.16 | 0.32 | 0.27 |
-| handshakeTask | 80 | 0.13 | 0.26 | 0.16 |
+| handshakeTask | 80 | 0.52 | 0.416 | 0.65 |
 | displayUpdateTask | 100 | 14.93 | 14.93 | 14.93 |
 | CAN_TX_ISR | 1.6 | 0.0015 | 0.0945 | 0.09 |
 | CAN_RX_ISR | 0.7 | 0.0017 | 0.2431 | 0.24 |
 | sampleISR | 0.04545 | 0.0192 | 42.2592 | 42.23 |
-| Total     |  | | 61.8368 | 61.66 |
+| Total     |  | | 61.9928 | 62.12 |
 
 ### Deadlines and CPU utilisation
-**Total latency is 61.8368ms**, less than the latency of the lowest priority task, which is displayUpdateTask with an initiation interval of 100ms ($\tau_n$). As the calculations are based on maximum execution times, this indicates that all deadlines are met under worst case conditions. The total CPU usage is **61.66%**.
+**Total latency is 62.12ms**, less than the latency of the lowest priority task, which is displayUpdateTask with an initiation interval of 100ms ($\tau_n$). As the calculations are based on maximum execution times, this indicates that all deadlines are met under worst case conditions. The total CPU usage is **61.99%**.
 
 ## Shared Data Structures and Safe Access
 ### Shared variables for System State, Note/Waveform/Volume Control
@@ -208,4 +218,4 @@ Potential deadlock can also occur externally. One such dependency occurs in hand
 
 There is a possibility of deadlock here, when module B misses the last message because it has not been fully plugged into A yet, but A’s stacking connector already detects an East handshake input. A is waiting for B to send a handshake complete signal (as B is now the eastmost module), and turns off its east handshaking signal, causing B to think it is the only module. Then, a deadlock occurs and handshaking never finishes. 
 
-To circumvent this, we add another state to our handshaking state machine. When a handshake signal is detected by the east most or west most modules, we enter a state 'waiting for stabilisation', and start a timer. This module only sends the restart message to the CAN bus when it has **constantly** detected a east/west HS signal for 0.5s. This ensures that there is enough time for the user to plug in extra modules and for all modules to be established on the CAN bus before HS restarts, and circumvents the deadlock problem. 
+To circumvent this, we add another state to our handshaking state machine. When a handshake signal is detected by the east most or west most modules, we enter a state 'waiting for stabilisation', and start a timer. This module only sends the restart message to the CAN bus when it has **constantly** detected a east/west HS signal for 0.5 micro seconds. The westmost module should also wait 0.5 micro seconds before sending its handshake message. This ensures that there is enough time for the user to plug in extra modules and for all modules to be established on the CAN bus before HS restarts, and circumvents the deadlock problem. 
